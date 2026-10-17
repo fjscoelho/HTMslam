@@ -13,6 +13,8 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 
 #include "local_view_match_with_intervals.hpp"
+#include "mode_manager/mode_globals.h"
+#include <std_msgs/msg/string.hpp>
 
 /**
  * @brief SpatialViewCellsNode - Visual place recognition and loop closure detection
@@ -75,6 +77,17 @@ public:
             [this](const topological_msgs::msg::SdrStamped::SharedPtr msg) {
                 this->sdr_callback(msg);
             });
+
+        // Add mode subscriber to listen for changes in the system mode (mapping/navigation)
+        mode_subscriber_ = create_subscription<std_msgs::msg::String>(
+        "/system_mode", 10,
+        [this](const std_msgs::msg::String::SharedPtr msg) {
+            current_mode_ = msg->data;
+            // Atualiza a variável global
+            ModeGlobals::getInstance().setMode(current_mode_);
+            RCLCPP_INFO(get_logger(), "🔀 PoseCell mode changed to: %s", current_mode_.c_str());
+            applyModeChange();
+        });
         
         // Set up map directory for saving/loading PoseCell state
             std::string states_dir = "./neoslam_exported_states/";
@@ -174,6 +187,17 @@ private:
                      "  [SpatialViewCells] Total callback time: %.2f ms", 
                      callback_duration.count() / 1000.0);
     }
+
+    void applyModeChange()
+    {
+        if (ModeGlobals::getInstance().isMappingMode()) {
+        RCLCPP_INFO(get_logger(), "🗺️ SpatialViewCells: MAPPING mode activated");
+        // Habilita criação de experiências
+        } else if (ModeGlobals::getInstance().isNavigationMode()) {
+        RCLCPP_INFO(get_logger(), "🧭 SpatialViewCells: NAVIGATION mode activated");
+        // Desabilita criação de experiências
+        }
+    }
     
     // LocalViewMatchWithIntervals instance
     std::unique_ptr<LocalViewMatchWithIntervals> lv_;
@@ -183,6 +207,8 @@ private:
     // ROS2 publishers and subscribers
     rclcpp::Publisher<topological_msgs::msg::ViewTemplate>::SharedPtr pub_vt_;
     rclcpp::Subscription<topological_msgs::msg::SdrStamped>::SharedPtr sub_sdr_;
+    std::string current_mode_ = "mapping";
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mode_subscriber_;
 
     // Services for exporting and importing state
     rclcpp::Service<std_srvs::srv::Empty>::SharedPtr export_sv_service_;

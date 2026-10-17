@@ -115,6 +115,8 @@ add_executable(spatial_view_cells_node
 target_include_directories(spatial_view_cells_node PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/spatial_view_cells
   ${EIGEN3_INCLUDE_DIRS}
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/mode_manager
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/mode_manager/include
   ${JSONCPP_INCLUDE_DIRS}
 )
 target_link_libraries(spatial_view_cells_node 
