@@ -90,15 +90,15 @@ public:
         });
         
         // Set up map directory for saving/loading PoseCell state
-            std::string states_dir = "./neoslam_exported_states/";
+            std::string states_dir = "./htmslam_exported_states/";
             
             try {
-                std::string pkg_share = ament_index_cpp::get_package_share_directory("neoslam");
+                std::string pkg_share = ament_index_cpp::get_package_share_directory("htmslam");
                 // Return to the src directory of the package
                 size_t pos = pkg_share.find("/install/");
                 if (pos != std::string::npos) {
                     std::string workspace = pkg_share.substr(0, pos);
-                    states_dir = workspace + "/src/neoslam/neoslam_exported_states/";
+                    states_dir = workspace + "/src/HTMslam/htmslam_exported_states/";
                     RCLCPP_INFO(this->get_logger(), "Map directory set to: %s", states_dir.c_str());
                 }
             } catch (const std::exception& e) {

@@ -16,7 +16,7 @@
 
 #include "experience_map.h"
 
-namespace neoslam {
+namespace htmslam {
 
 struct MapMetadata {
     std::string version = "1.0";
@@ -43,7 +43,7 @@ struct MapMetadata {
 
 class MapManager {
 public:
-    MapManager(ExperienceMap* em, const std::string& states_dir = "./neoslam_exported_states/");
+    MapManager(ExperienceMap* em, const std::string& states_dir = "./htmslam_exported_states/");
     ~MapManager() = default;
     
     // Exportação
@@ -80,6 +80,6 @@ private:
     bool validate_metadata(const MapMetadata& metadata);
 };
 
-} // namespace neoslam
+} // namespace htmslam
 
 #endif

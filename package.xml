@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>neoslam</name>
+  <name>htmslam</name>
   <version>1.0.0</version>
-  <description>neoslam ROS 2 implementation - A bio-inspired simultaneous localization and mapping system</description>
+  <description>htmslam ROS 2 implementation - A bio-inspired simultaneous localization and mapping system</description>
 
   <maintainer email="fabiojuniocoelho@gmail.com">Fabio Junio dos Santos Coelho</maintainer>
   <author>Fabio Junio dos Santos Coelho</author>
@@ -12,7 +12,7 @@
 
   <license>BSD</license>
 
-  <url type="website">https://github.com/fjscoelho/neoslam</url>
+  <url type="website">https://github.com/fjscoelho/HTMslam</url>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>rosidl_default_generators</buildtool_depend>
@@ -31,6 +31,7 @@
   <depend>cv_bridge</depend>
   <depend>topological_msgs</depend>
   <depend>std_srvs</depend>
+  <depend>message_filters</depend>
 
   <!-- Bibliotecas de sistema -->
   <depend>OpenCV</depend>

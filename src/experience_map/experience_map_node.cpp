@@ -28,9 +28,9 @@
 #include <fstream>
 #include <memory>
 #include "map_manager.hpp"
-#include <neoslam/srv/import_map.hpp>
-#include <neoslam/srv/list_maps.hpp>
-#include "neoslam/srv/set_goal.hpp"
+#include <htmslam/srv/import_map.hpp>
+#include <htmslam/srv/list_maps.hpp>
+#include "htmslam/srv/set_goal.hpp"
 #include <ament_index_cpp/get_package_share_directory.hpp>
 
 
@@ -107,15 +107,15 @@ class ExperienceMapNode : public rclcpp::Node
       em->resetOdomPose(0.0, 0.0, 0.0);
 
       // Initialize Map Manager with proper directory
-      std::string states_dir = "./neoslam_exported_states/";
+      std::string states_dir = "./htmslam_exported_states/";
       
       try {
-          std::string pkg_share = ament_index_cpp::get_package_share_directory("neoslam");
+          std::string pkg_share = ament_index_cpp::get_package_share_directory("htmslam");
           // Return to the src directory of the package
           size_t pos = pkg_share.find("/install/");
           if (pos != std::string::npos) {
               std::string workspace = pkg_share.substr(0, pos);
-              states_dir = workspace + "/src/neoslam/neoslam_exported_states/";
+              states_dir = workspace + "/src/HTMslam/htmslam_exported_states/";
               RCLCPP_INFO(this->get_logger(), "Map directory set to: %s", states_dir.c_str());
           }
       } catch (const std::exception& e) {
@@ -128,7 +128,7 @@ class ExperienceMapNode : public rclcpp::Node
       system(mkdir_cmd.c_str());
 
       // Initialize Map Manager
-      map_manager_ = std::make_shared<neoslam::MapManager>(em, states_dir);
+      map_manager_ = std::make_shared<htmslam::MapManager>(em, states_dir);
       RCLCPP_INFO(this->get_logger(), "Map Manager initialized");
       RCLCPP_INFO(this->get_logger(), "  Map directory: %s", map_manager_->get_states_dir().c_str());
 
@@ -157,13 +157,13 @@ class ExperienceMapNode : public rclcpp::Node
                     std::placeholders::_1, std::placeholders::_2)
       );
 
-      import_map_service_ = this->create_service<neoslam::srv::ImportMap>(
+      import_map_service_ = this->create_service<htmslam::srv::ImportMap>(
           "/experience_map/import_map",
           std::bind(&ExperienceMapNode::import_map_callback, this,
                     std::placeholders::_1, std::placeholders::_2)
       );
 
-      list_maps_service_ = this->create_service<neoslam::srv::ListMaps>(
+      list_maps_service_ = this->create_service<htmslam::srv::ListMaps>(
           "/experience_map/list_maps",
           std::bind(&ExperienceMapNode::list_maps_callback, this,
                     std::placeholders::_1, std::placeholders::_2)
@@ -172,7 +172,7 @@ class ExperienceMapNode : public rclcpp::Node
       RCLCPP_INFO(this->get_logger(), "Map export/import services initialized");
 
       //NEW: Set goal service
-      set_goal_service_ = this->create_service<neoslam::srv::SetGoal>(
+      set_goal_service_ = this->create_service<htmslam::srv::SetGoal>(
       "/experience_map/set_goal",
       std::bind(&ExperienceMapNode::set_goal_callback, this,
                 std::placeholders::_1, std::placeholders::_2));
@@ -263,7 +263,7 @@ class ExperienceMapNode : public rclcpp::Node
         (void)response;
         
         if (map_manager_) {
-            neoslam::MapMetadata metadata;
+            htmslam::MapMetadata metadata;
             metadata.description = "NeoSLAM Topological Map (JSON)";
             std::string timestamp = std::to_string(this->now().seconds());
             metadata.custom_params["topic_root"] = topic_root_;
@@ -279,7 +279,7 @@ class ExperienceMapNode : public rclcpp::Node
         (void)response;
         
         if (map_manager_) {
-            neoslam::MapMetadata metadata;
+            htmslam::MapMetadata metadata;
             metadata.description = "NeoSLAM Topological Map (YAML)";
             std::string timestamp = std::to_string(this->now().seconds());
             map_manager_->export_yaml("map_" + timestamp + ".yaml", metadata);
@@ -294,7 +294,7 @@ class ExperienceMapNode : public rclcpp::Node
         (void)response;
         
         if (map_manager_) {
-            neoslam::MapMetadata metadata;
+            htmslam::MapMetadata metadata;
             metadata.description = "NeoSLAM Topological Map (Binary)";
             std::string timestamp = std::to_string(this->now().seconds());
             map_manager_->export_binary("map_" + timestamp + ".bin", metadata);
@@ -309,7 +309,7 @@ class ExperienceMapNode : public rclcpp::Node
         (void)response;
         
         if (map_manager_) {
-            neoslam::MapMetadata metadata;
+            htmslam::MapMetadata metadata;
             metadata.description = "NeoSLAM Topological Map (All Formats)";
             std::string timestamp = std::to_string(this->now().seconds());
             map_manager_->export_all("map_" + timestamp, metadata);
@@ -317,8 +317,8 @@ class ExperienceMapNode : public rclcpp::Node
     }
 
     void import_map_callback(
-        const std::shared_ptr<neoslam::srv::ImportMap::Request> request,
-        std::shared_ptr<neoslam::srv::ImportMap::Response> response)
+        const std::shared_ptr<htmslam::srv::ImportMap::Request> request,
+        std::shared_ptr<htmslam::srv::ImportMap::Response> response)
     {
         if (map_manager_) {
           bool success = map_manager_->import_map(request->filename);
@@ -347,8 +347,8 @@ class ExperienceMapNode : public rclcpp::Node
     }
 
     void list_maps_callback(
-        const std::shared_ptr<neoslam::srv::ListMaps::Request> request,
-        std::shared_ptr<neoslam::srv::ListMaps::Response> response)
+        const std::shared_ptr<htmslam::srv::ListMaps::Request> request,
+        std::shared_ptr<htmslam::srv::ListMaps::Response> response)
     {
         (void)request;
         
@@ -365,8 +365,8 @@ class ExperienceMapNode : public rclcpp::Node
   
     // Service callback to set a new goal
     void set_goal_callback(
-      const std::shared_ptr<neoslam::srv::SetGoal::Request> request,
-      std::shared_ptr<neoslam::srv::SetGoal::Response> response)
+      const std::shared_ptr<htmslam::srv::SetGoal::Request> request,
+      std::shared_ptr<htmslam::srv::SetGoal::Response> response)
     {
       if (em->get_num_experiences() == 0) {
         response->success = false;
@@ -1047,16 +1047,16 @@ class ExperienceMapNode : public rclcpp::Node
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
     // Map Manager
-    std::shared_ptr<neoslam::MapManager> map_manager_;
+    std::shared_ptr<htmslam::MapManager> map_manager_;
     std::string topic_root_;
     std::shared_ptr<StateManager> state_manager_;
     rclcpp::Service<std_srvs::srv::Empty>::SharedPtr export_json_service_;
     rclcpp::Service<std_srvs::srv::Empty>::SharedPtr export_yaml_service_;
     rclcpp::Service<std_srvs::srv::Empty>::SharedPtr export_binary_service_;
     rclcpp::Service<std_srvs::srv::Empty>::SharedPtr export_all_service_;
-    rclcpp::Service<neoslam::srv::ImportMap>::SharedPtr import_map_service_;
-    rclcpp::Service<neoslam::srv::ListMaps>::SharedPtr list_maps_service_;
-    rclcpp::Service<neoslam::srv::SetGoal>::SharedPtr set_goal_service_;
+    rclcpp::Service<htmslam::srv::ImportMap>::SharedPtr import_map_service_;
+    rclcpp::Service<htmslam::srv::ListMaps>::SharedPtr list_maps_service_;
+    rclcpp::Service<htmslam::srv::SetGoal>::SharedPtr set_goal_service_;
 
     std::string current_mode_ = "mapping";
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mode_subscriber_;

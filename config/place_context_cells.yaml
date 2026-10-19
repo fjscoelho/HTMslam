@@ -1,0 +1,17 @@
+place_context_cells_node:
+  ros__parameters:
+    # SDR overlap ratio (shared bits / active bits of the current SDR) above
+    # which an existing PlaceContextTemplate is considered a match.
+    match_threshold: 0.85
+
+    # Stratified angular histogram used for the relative yaw estimate.
+    hist_n_bins: 360
+    hist_n_rings: 10
+    hist_use_centroid: true
+    hist_refine_peak: false
+
+    # Minimum number of finite points in the cloud.
+    min_points: 100
+
+    # Maximum stamp difference when pairing a cloud with a PlaceContext.
+    sync_max_interval: 0.5

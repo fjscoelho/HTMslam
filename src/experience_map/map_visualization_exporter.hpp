@@ -9,7 +9,7 @@
 #include <json/json.h>
 #include "experience_map.h"
 
-namespace neoslam {
+namespace htmslam {
 
 class MapVisualizationExporter : public rclcpp::Node
 {
@@ -243,6 +243,6 @@ private:
     }
 };
 
-} // namespace neoslam
+} // namespace htmslam
 
 #endif

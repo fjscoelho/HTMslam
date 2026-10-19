@@ -3,4 +3,10 @@
 /bags
 src/dim_reduction_and_binarization/random_matrix/*.bin
 /build
-/neoslam_exported_states
+/htmslam_exported_states
+
+# PointCloudRecognition: keep only its src/ folder under version control
+src/PointCloudRecognition/*
+!src/PointCloudRecognition/src
+
+__pycache__/

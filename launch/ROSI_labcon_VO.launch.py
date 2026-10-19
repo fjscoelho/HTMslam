@@ -8,10 +8,10 @@ from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
     # Get package directory
-    pkg_dir = get_package_share_directory('neoslam')
+    pkg_dir = get_package_share_directory('htmslam')
     
     # Configuration file
-    config_file = os.path.join(pkg_dir, 'config', 'config_neoslam_ROSI_labcon_VO.yaml')
+    config_file = os.path.join(pkg_dir, 'config', 'config_htmslam_ROSI_labcon_VO.yaml')
     
     # Common parameters
     topic_root = 'ROSI'
@@ -19,14 +19,14 @@ def generate_launch_description():
     image_file = 'irat_sm.tga'
     
     # Python module path for visual feature extractor
-    python_module_path = os.path.join(pkg_dir, '..', '..', 'lib', 'neoslam', 'visual_feature_extractor')
+    python_module_path = os.path.join(pkg_dir, '..', '..', 'lib', 'htmslam', 'visual_feature_extractor')
     
     # Random matrix path for binary projector
     random_matrix_path = os.path.join(pkg_dir, 'random_matrix', 'randomMatrix.bin')
     
     # NeoSLAM nodes
     vfe_node = Node(
-        package='neoslam',
+        package='htmslam',
         executable='visual_feature_extractor_node',
         name='visual_feature_extractor_node',
         output='screen',
@@ -41,7 +41,7 @@ def generate_launch_description():
     )
 
     bp_node = Node(
-        package='neoslam',
+        package='htmslam',
         executable='binary_projector_node',
         name='binary_projector_node',
         output='screen',
@@ -56,7 +56,7 @@ def generate_launch_description():
     )
 
     neocortex_node = Node(
-        package='neoslam',
+        package='htmslam',
         executable='neocortex_node',
         name='neocortex_node',
         output='screen',
@@ -70,7 +70,7 @@ def generate_launch_description():
     )
 
     svc_node = Node(
-        package='neoslam',
+        package='htmslam',
         executable='spatial_view_cells_node',
         name='spatial_view_cells_node',
         output='screen',
@@ -84,7 +84,7 @@ def generate_launch_description():
     )
 
     pc_node = Node(
-        package='neoslam',
+        package='htmslam',
         executable='pose_cells_node',
         name='pose_cells_node',
         output='screen',
@@ -100,7 +100,7 @@ def generate_launch_description():
     )
 
     em_node = Node(
-        package='neoslam',
+        package='htmslam',
         executable='experience_map_node',
         name='experience_map_node',
         output='screen',
@@ -116,7 +116,7 @@ def generate_launch_description():
     )
 
     vo_node = Node(
-        package='neoslam',
+        package='htmslam',
         executable='visual_odometry_node',
         name='visual_odometry_node',
         output='screen',

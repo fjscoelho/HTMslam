@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(neoslam)
+project(htmslam)
 
 # Default to C++14
 if(NOT CMAKE_CXX_STANDARD)
@@ -28,6 +28,7 @@ find_package(image_transport REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(topological_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
+find_package(message_filters REQUIRED)
 
 find_package(OpenCV REQUIRED)
 find_package(Boost REQUIRED COMPONENTS serialization)
@@ -106,6 +107,38 @@ target_link_libraries(neocortex_node
 )
 ament_target_dependencies(neocortex_node
   rclcpp
+  topological_msgs
+)
+
+# pcd_htm_node executable (PointCloudRecognition: encoder SDR + HTM context)
+add_executable(pcd_htm_node
+  src/PointCloudRecognition/src/pcd_htm_node.cpp)
+target_include_directories(pcd_htm_node PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/neocortex
+  ${EIGEN3_INCLUDE_DIRS}
+)
+target_link_libraries(pcd_htm_node
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/neocortex/htm/libhtm_core.a
+  nlohmann_json::nlohmann_json
+  pthread
+)
+ament_target_dependencies(pcd_htm_node
+  rclcpp
+  sensor_msgs
+  topological_msgs
+  ament_index_cpp
+)
+
+# place_context_cells_node executable (RatSLAM-style local view cells)
+add_executable(place_context_cells_node
+  src/place_context_cells/place_context_cells_node.cpp)
+target_include_directories(place_context_cells_node PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/PointCloudRecognition/src
+)
+ament_target_dependencies(place_context_cells_node
+  rclcpp
+  sensor_msgs
+  message_filters
   topological_msgs
 )
 
@@ -238,6 +271,8 @@ install(TARGETS
   visual_feature_extractor_node
   binary_projector_node
   neocortex_node
+  pcd_htm_node
+  place_context_cells_node
   spatial_view_cells_node 
   pose_cells_node 
   experience_map_node 
@@ -275,6 +310,11 @@ install(DIRECTORY src/dim_reduction_and_binarization/random_matrix/
 install(DIRECTORY config/
   DESTINATION share/${PROJECT_NAME}/config
   FILES_MATCHING PATTERN "*.yaml"
+)
+
+# Place encoder configuration used by pcd_htm_node
+install(FILES src/PointCloudRecognition/src/encoder_config.json
+  DESTINATION share/${PROJECT_NAME}/config
 )
 
 # Install headers

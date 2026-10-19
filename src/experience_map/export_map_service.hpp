@@ -7,7 +7,7 @@
 #include <json/json.h>
 #include "experience_map.h"
 
-namespace neoslam {
+namespace htmslam {
 
 class ExportMapService : public rclcpp::Node
 {
@@ -149,6 +149,6 @@ private:
     }
 };
 
-} // namespace neoslam
+} // namespace htmslam
 
 #endif // EXPORT_MAP_SERVICE_HPP

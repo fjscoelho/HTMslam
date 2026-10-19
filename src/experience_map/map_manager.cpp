@@ -2,7 +2,7 @@
 #include <iostream>
 #include <cstring>
 
-namespace neoslam 
+namespace htmslam 
 {
 
     MapManager::MapManager(ExperienceMap* em, const std::string& states_dir) 
@@ -556,4 +556,4 @@ namespace neoslam
         }
     }
 
-} // namespace neoslam
+} // namespace htmslam

@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Dependency installation script for neoslam
+# Dependency installation script for htmslam
 # ROS 2 Jazzy on Ubuntu
 
 echo "======================================"
-echo "neoslam ROS 2 - Dependency Installation"
+echo "htmslam ROS 2 - Dependency Installation"
 echo "======================================"
 echo ""
 
@@ -72,15 +72,15 @@ echo "Next steps:"
 echo ""
 echo "1. Copy the package to your workspace:"
 echo "   mkdir -p ~/ros2_ws/src"
-echo "   cp -r /path/to/neoslam ~/ros2_ws/src/"
+echo "   cp -r /path/to/htmslam ~/ros2_ws/src/"
 echo ""
 echo "2. Build the package:"
 echo "   cd ~/ros2_ws"
-echo "   colcon build --packages-select neoslam"
+echo "   colcon build --packages-select htmslam"
 echo ""
 echo "3. Source the workspace:"
 echo "   source install/setup.bash"
 echo ""
 echo "4. Run:"
-echo "   ros2 launch neoslam stlucia.launch.py"
+echo "   ros2 launch htmslam stlucia.launch.py"
 echo ""

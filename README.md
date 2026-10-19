@@ -1,12 +1,12 @@
-# neoslam
+# htmslam
 
 This package is a bio-inspired SLAM system for ROS 2 (tested on ROS 2 Jazzy) that combines deep learning visual features, Hierarchical Temporal Memory (HTM), and topological mapping for robust simultaneous localization and mapping.
 
 ## System Overview
 
-![neoslam Architecture](neoslam_arch.png)
+![htmslam Architecture](htmslam_arch.png)
 
-neoslam implements a complete visual SLAM pipeline with the following components:
+htmslam implements a complete visual SLAM pipeline with the following components:
 
 - **Visual Feature Extractor**: Extracts deep features from camera images using AlexNet (PyTorch)
 - **Binary Projector**: Reduces dimensionality using Locality-Sensitive Binary Hashing (LSBH)
@@ -168,7 +168,7 @@ rosdep update
 
 ```bash
 cd ~/ros2_jazzy_ws/src
-git clone https://github.com/fjscoelho/neoslam.git
+git clone https://github.com/fjscoelho/HTMslam.git
 git clone https://github.com/BorgesJVT/topological_msgs.git
 ```
 
@@ -177,7 +177,7 @@ git clone https://github.com/BorgesJVT/topological_msgs.git
 The binary projector requires a random projection matrix. Generate it with:
 
 ```bash
-cd ~/ros2_jazzy_ws/src/neoslam/src/dim_reduction_and_binarization/random_matrix
+cd ~/ros2_jazzy_ws/src/HTMslam/src/dim_reduction_and_binarization/random_matrix
 python3 generate_random_matrix.py --rows 64896 --cols 1024 --output randomMatrix.bin
 ```
 
@@ -192,7 +192,7 @@ source ~/ros2_env/bin/activate
 # Build packages
 cd ~/ros2_jazzy_ws
 source /opt/ros/jazzy/setup.bash
-colcon build --packages-select topological_msgs neoslam --symlink-install
+colcon build --packages-select topological_msgs htmslam --symlink-install
 ```
 
 ### 9. Source the Workspace
@@ -205,12 +205,12 @@ source ~/ros2_jazzy_ws/install/setup.bash
 
 ### Basic Launch
 
-neoslam provides launch files for different datasets:
+htmslam provides launch files for different datasets:
 
 ```bash
 
 # For Robotarium dataset
-ros2 launch neoslam robotarium.launch.py use_sim_time:=true
+ros2 launch htmslam robotarium.launch.py use_sim_time:=true
 ```
 ### Rviz Visualization
 
@@ -230,7 +230,7 @@ The RViz display includes:
 
 ```bash
 # For Robotarium dataset
-cd ~/ros2_jazzy_ws/src/neoslam/rviz/
+cd ~/ros2_jazzy_ws/src/HTMslam/rviz/
 rviz2 -d robotarium.rviz
 ```
 ![Rviz_mapping](<robotarium _mapping.png>)
@@ -269,14 +269,14 @@ to correct odometric drift.;
 
 ### Export and Import Map Data
 
-neoslam allows you to export the entire state of the SLAM system, including pose cells, spatial view cells, and the topological experience map. This enables you to save maps for later use or share them between different runs.
+htmslam allows you to export the entire state of the SLAM system, including pose cells, spatial view cells, and the topological experience map. This enables you to save maps for later use or share them between different runs.
 
 #### Exporting system state
 
 After finishing the mapping task you can export the final map, and the states of posecells and spatial_view_cells:
 
 ```bash
-# Export the map to the default location (/neoslam_exported_states)
+# Export the map to the default location (/htmslam_exported_states)
 ros2 ros2 service call /experience_map/export_json std_srvs/srv/Empty
 # Export pose_cells state
 ros2 service call /pose_cells/export_state std_srvs/srv/Empty
@@ -296,7 +296,7 @@ Once mapped, you can restart the NeoSLAM and retrive the system state. You must 
 
 ```bash
 # Import services
-ros2 ros2 service call /experience_map/import_map neoslam/srv/ImportMap "{filename: 'map_xxxxxx.json'}"
+ros2 ros2 service call /experience_map/import_map htmslam/srv/ImportMap "{filename: 'map_xxxxxx.json'}"
 ros2 service call /pose_cells/import_state std_srvs/srv/Empty
 ros2 service call /spatial_view/import_state std_srvs/srv/Empty
 ```
@@ -318,7 +318,7 @@ You can send goal poses for path planning. Example:
 ros2 topic pub /robotarium/ExperienceMap/SetGoalPose geometry_msgs/msg/PoseStamped "{header: {frame_id: 'map'}, pose: {position: {x: 0.0, y: 1.0, z: 0.0}, orientation: {x: 0.0, y: 0.0, z: 0.707, w: 0.707}}}" --once
 
 # or via service
-ros2 service call /experience_map/set_goal neoslam/srv/SetGoal "{x: 0.0, y: 1.0}"
+ros2 service call /experience_map/set_goal htmslam/srv/SetGoal "{x: 0.0, y: 1.0}"
 ```
 
 Example:
