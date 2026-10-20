@@ -365,7 +365,7 @@ public:
       std::vector<htm::UInt>{static_cast<htm::UInt>(tm_->numberOfCells())});
 
     const std::string cloud_topic = pointcloud_topic.empty() ?
-      topic_root_ + "/points" : pointcloud_topic;
+      topic_root_ + "/pointcloud" : pointcloud_topic;
 
     publisher_ = this->create_publisher<topological_msgs::msg::PlaceContext>(
       topic_root_ + "/place_context", 10);

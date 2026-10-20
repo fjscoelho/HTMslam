@@ -272,7 +272,7 @@ public:
     }
 
     const std::string cloud_topic = pointcloud_topic.empty() ?
-      topic_root_ + "/points" : pointcloud_topic;
+      topic_root_ + "/pointcloud" : pointcloud_topic;
     const std::string context_topic = place_context_topic.empty() ?
       topic_root_ + "/place_context" : place_context_topic;
 

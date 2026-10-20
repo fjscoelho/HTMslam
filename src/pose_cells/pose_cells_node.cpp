@@ -13,7 +13,7 @@ using namespace std;
 #include "mode_manager/mode_globals.h"  // <-- NOVO INCLUDE
 #include <topological_msgs/msg/topological_action.hpp>
 #include <nav_msgs/msg/odometry.hpp>
-#include <topological_msgs/msg/view_template.hpp>
+#include <topological_msgs/msg/place_context_match.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 
 
@@ -34,7 +34,8 @@ bool use_graphics;
  * 
  * Subscriptions:
  *   - <topic_root>/odom: Receives odometry data for path integration
- *   - <topic_root>/LocalView/Template: Receives visual template matches for correction
+ *   - <topic_root>/place_context_match: Receives place context cell matches
+ *     (id + relative yaw) from place_context_cells_node for correction
  * 
  * Publications:
  *   - <topic_root>/PoseCell/TopologicalAction: Publishes actions for experience map updates
@@ -117,9 +118,9 @@ public:
       topic_root + "/odom", 10,
       std::bind(&PoseCellNode::odo_callback, this, std::placeholders::_1));
     
-    sub_template = this->create_subscription<topological_msgs::msg::ViewTemplate>(
-      topic_root + "/LocalView/Template", 10,
-      std::bind(&PoseCellNode::template_callback, this, std::placeholders::_1));
+    sub_place_context = this->create_subscription<topological_msgs::msg::PlaceContextMatch>(
+      topic_root + "/place_context_match", 10,
+      std::bind(&PoseCellNode::place_context_callback, this, std::placeholders::_1));
 
     // Add mode subscriber to listen for changes in the system mode (mapping/navigation)
     mode_subscriber_ = create_subscription<std_msgs::msg::String>(
@@ -265,12 +266,13 @@ private:
     prev_time = rclcpp::Time(odo->header.stamp);
   }
 
-  void template_callback(const topological_msgs::msg::ViewTemplate::SharedPtr vt)
+  void place_context_callback(
+    const topological_msgs::msg::PlaceContextMatch::SharedPtr match)
   {
-    RCLCPP_INFO(this->get_logger(), "PC:vt_callback id=%d rad=%f", 
-                 vt->current_id, vt->relative_rad);
+    RCLCPP_INFO(this->get_logger(), "PC:place_context_callback id=%d rad=%f matched=%d",
+                 match->context_cell_id, match->relative_rad, static_cast<int>(match->matched));
 
-    pc->on_view_template(vt->current_id, vt->relative_rad);
+    pc->on_view_template(match->context_cell_id, match->relative_rad);
   
         #ifdef HAVE_IRRLICHT
             if (use_graphics)
@@ -315,7 +317,7 @@ private:
   PosecellNetwork* pc = nullptr;
   rclcpp::Publisher<topological_msgs::msg::TopologicalAction>::SharedPtr pub_pc;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_odometry;
-  rclcpp::Subscription<topological_msgs::msg::ViewTemplate>::SharedPtr sub_template;
+  rclcpp::Subscription<topological_msgs::msg::PlaceContextMatch>::SharedPtr sub_place_context;
   rclcpp::Time prev_time{0, 0, RCL_ROS_TIME};
   topological_msgs::msg::TopologicalAction pc_output;
   std::string current_mode_ = "mapping";
