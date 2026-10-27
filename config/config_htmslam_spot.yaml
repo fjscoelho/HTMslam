@@ -45,10 +45,16 @@ pose_cells_node:
     pc_global_inhib: 0.00002
     vt_active_decay: 1.0
     pc_vt_inject_energy: 0.15
-    pc_cell_x_size: 0.01
+    # 30 cells * 2 m = 60 m grid. With ~2 m per odometry message this keeps
+    # the translation below 1.41 cell/step, the range where path_integration
+    # weights stay non-negative.
+    pc_cell_x_size: 2.0
     exp_delta_pc_threshold: 2.0
     pc_vt_restore: 0.05
     posecells_size: 250
+    # Spot is holonomic: use twist.linear.y too, so the translation direction
+    # is not forced along the heading.
+    holonomic_odometry: true
     # Irrlicht window (enable_graphics:=true|false overrides this value)
     enable: true
 
@@ -56,8 +62,11 @@ experience_map_node:
   ros__parameters:
     exp_correction: 0.5
     exp_loops: 1
-    exp_initial_em_deg: 90.0
+    exp_initial_em_deg: -83.1
     exp_map_size: 500
     export_filename: topological_map.json
+    # Spot is holonomic: use twist.linear.y too, so the translation direction
+    # is not forced along the heading.
+    holonomic_odometry: true
     # Irrlicht window (enable_graphics:=true|false overrides this value)
     enable: true

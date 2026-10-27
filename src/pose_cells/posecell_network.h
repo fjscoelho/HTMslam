@@ -58,6 +58,12 @@ public:
 
   void on_odo(double vtrans, double vrot, double time_diff_s);
 
+  // Same as on_odo, but the translation direction is decoupled from the body
+  // heading, as required by holonomic robots. `vtrans` is the (non-negative)
+  // speed in m/s and `dheading` is the direction of the translation in the
+  // body frame, in radians (0 = straight ahead).
+  void on_odo_holonomic(double vtrans, double dheading, double vrot, double time_diff_s);
+
   void on_view_template(unsigned int vt, double vt_rad);
 
   PosecellAction get_action();
@@ -180,7 +186,8 @@ private:
 
   // shift the energy in the system by a
   // translational and rotational velocity.
-  bool path_integration(double vtrans, double vrot);
+  // `dheading` rotates the translation direction inside the body frame.
+  bool path_integration(double vtrans, double vrot, double dheading = 0.0);
 
   // find an approximation of the centre of the energy
   // packet.

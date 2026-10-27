@@ -114,6 +114,11 @@ public:
   // since the last experience
   void on_odo(double vtrans, double vrot, double time_diff_s);
 
+  // Same as on_odo, but the translation direction is decoupled from the
+  // heading (holonomic robots). `vtrans` is the (non-negative) speed and
+  // `dheading` the direction of the translation in the body frame (rad).
+  void on_odo_holonomic(double vtrans, double dheading, double vrot, double time_diff_s);
+
   // update the map by relaxing the graph
   bool iterate();
 
@@ -258,9 +263,10 @@ public:
     void updateOdomPose(double vtrans, double vrot, double time_diff_s) {
       vtrans = vtrans * time_diff_s;
       vrot = vrot * time_diff_s;
-      odom_th_ = clip_rad_180(odom_th_ + vrot);
+      // Deslocamento no referencial do inicio do intervalo (ver on_odo).
       odom_x_ += vtrans * cos(odom_th_);
       odom_y_ += vtrans * sin(odom_th_);
+      odom_th_ = clip_rad_180(odom_th_ + vrot);
       use_odom_pose_ = true;
     }
 

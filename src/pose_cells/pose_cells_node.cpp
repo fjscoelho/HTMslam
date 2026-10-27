@@ -1,3 +1,4 @@
+#include <cmath>
 #include <iostream>
 #include <memory>
 #include <functional>
@@ -16,6 +17,12 @@ using namespace std;
 #include <topological_msgs/msg/place_context_match.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 
+namespace
+{
+// Translation below this (metres per odometry step) has no reliable direction,
+// so the holonomic heading offset is kept at zero.
+constexpr double kMinHolonomicTranslation = 1e-4;
+}  // namespace
 
 #if HAVE_IRRLICHT
 #include "posecell_scene.h"
@@ -58,6 +65,8 @@ bool use_graphics;
  *   - posecells_size: Size of visualization window (default: 250)
  *   - media_path: Path to media resources for visualization
  *   - image_file: Image file for visualization background
+ *   - holonomic_odometry: Use twist.linear.y as well, decoupling the
+ *     translation direction from the heading (default: false)
  */
 class PoseCellNode : public rclcpp::Node
 {
@@ -83,8 +92,10 @@ public:
     this->declare_parameter("posecells_size", 250);
     this->declare_parameter("media_path", "");
     this->declare_parameter("image_file", "");
+    this->declare_parameter("holonomic_odometry", false);
     
     std::string topic_root = this->get_parameter("topic_root").as_string();
+    holonomic_odometry_ = this->get_parameter("holonomic_odometry").as_bool();
     
     // Log all parameters for debugging
     RCLCPP_INFO(this->get_logger(), "PoseCell Parameters:");
@@ -94,6 +105,7 @@ public:
     RCLCPP_INFO(this->get_logger(), "  pc_vt_inject_energy: %f", this->get_parameter("pc_vt_inject_energy").as_double());
     RCLCPP_INFO(this->get_logger(), "  pc_cell_x_size: %f", this->get_parameter("pc_cell_x_size").as_double());
     RCLCPP_INFO(this->get_logger(), "  exp_delta_pc_threshold: %f", this->get_parameter("exp_delta_pc_threshold").as_double());
+    RCLCPP_INFO(this->get_logger(), "  holonomic_odometry: %s", holonomic_odometry_ ? "true" : "false");
     
     // Create PosecellNetwork with parameters
     pc = new PosecellNetwork(
@@ -240,7 +252,26 @@ private:
       double time_diff = (rclcpp::Time(odo->header.stamp) - prev_time).seconds();
 
       pc_output.src_id = pc->get_current_exp_id();
-      pc->on_odo(odo->twist.twist.linear.x, odo->twist.twist.angular.z, time_diff);
+      if (holonomic_odometry_)
+      {
+        const double vx = odo->twist.twist.linear.x;
+        const double vy = odo->twist.twist.linear.y;
+        double speed = std::hypot(vx, vy);
+        double dheading = 0.0;
+        if (speed * time_diff > kMinHolonomicTranslation)
+        {
+          dheading = std::atan2(vy, vx);
+        }
+        else
+        {
+          speed = 0.0;
+        }
+        pc->on_odo_holonomic(speed, dheading, odo->twist.twist.angular.z, time_diff);
+      }
+      else
+      {
+        pc->on_odo(odo->twist.twist.linear.x, odo->twist.twist.angular.z, time_diff);
+      }
       pc_output.action = pc->get_action();
       
       if (pc_output.action != PosecellNetwork::NO_ACTION)
@@ -321,6 +352,7 @@ private:
   rclcpp::Time prev_time{0, 0, RCL_ROS_TIME};
   topological_msgs::msg::TopologicalAction pc_output;
   std::string current_mode_ = "mapping";
+  bool holonomic_odometry_ = false;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mode_subscriber_;
   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr export_pc_service_;
   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr import_pc_service_;  

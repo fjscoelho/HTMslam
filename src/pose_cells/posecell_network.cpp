@@ -5,6 +5,7 @@
 #include <string.h>
 #include <assert.h>
 
+#include <cmath>
 #include <float.h>
 
 using namespace std;
@@ -320,10 +321,13 @@ bool PosecellNetwork::normalise(void)
 
 }
 
-bool PosecellNetwork::path_integration(double vtrans, double vrot)
+bool PosecellNetwork::path_integration(double vtrans, double vrot, double dheading)
 {
   int dir_pc;
-  double angle_to_add = 0;
+  // Translation direction relative to the body heading. Non-holonomic callers
+  // pass dheading = 0; holonomic callers pass the angle of the velocity
+  // vector inside the body frame.
+  double angle_to_add = dheading;
 
   // scaling
   vtrans /= PC_CELL_X_SIZE;
@@ -331,7 +335,7 @@ bool PosecellNetwork::path_integration(double vtrans, double vrot)
   if (vtrans < 0)
   {
     vtrans = -vtrans;
-    angle_to_add = M_PI;
+    angle_to_add += M_PI;
   }
   // % shift in each th given by the th
   // for dir_pc=1:PARAMS.PC_DIM_TH
@@ -341,6 +345,13 @@ bool PosecellNetwork::path_integration(double vtrans, double vrot)
     // % radians
     // dir = (dir_pc - 1) * pc.PC_C_SIZE_TH;
     double dir = dir_pc * PC_C_SIZE_TH + angle_to_add;
+    // Keep dir in [0, 2pi) so the quadrant count below stays in range
+    // (equivalent: rot90_square and dir90 are periodic in 2pi).
+    dir = std::fmod(dir, 2.0 * M_PI);
+    if (dir < 0.0)
+    {
+      dir += 2.0 * M_PI;
+    }
 
     double dir90, weight_sw, weight_se, weight_nw, weight_ne;
     int i, j;
@@ -992,6 +1003,20 @@ void PosecellNetwork::on_odo(double vtrans, double vrot, double time_diff_s)
   global_inhibit();
   normalise();
   path_integration(vtrans, vrot);
+  find_best();
+  odo_update = true;
+}
+
+void PosecellNetwork::on_odo_holonomic(double vtrans, double dheading, double vrot, double time_diff_s)
+{
+  vtrans = vtrans * time_diff_s;
+  vrot = vrot * time_diff_s;
+
+  excite();
+  inhibit();
+  global_inhibit();
+  normalise();
+  path_integration(vtrans, vrot, dheading);
   find_best();
   odo_update = true;
 }

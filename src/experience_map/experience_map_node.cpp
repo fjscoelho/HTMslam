@@ -32,6 +32,14 @@
 #include <htmslam/srv/list_maps.hpp>
 #include "htmslam/srv/set_goal.hpp"
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <cmath>
+
+namespace
+{
+// Translation below this (metres per odometry step) has no reliable direction,
+// so the holonomic heading offset is kept at zero.
+constexpr double kMinHolonomicTranslation = 1e-4;
+}  // namespace
 
 
 #ifdef HAVE_IRRLICHT
@@ -68,6 +76,8 @@
  *   - exp_map_size: Size of visualization window (default: 500)
  *   - media_path: Path to media resources for visualization
  *   - image_file: Image file for visualization background
+ *   - holonomic_odometry: Use twist.linear.y as well, decoupling the
+ *     translation direction from the heading (default: false)
  */
 class ExperienceMapNode : public rclcpp::Node
 {
@@ -85,8 +95,10 @@ class ExperienceMapNode : public rclcpp::Node
       this->declare_parameter("media_path", "");
       this->declare_parameter("image_file", "");
       this->declare_parameter("export_filename", "topological_map.json");
+      this->declare_parameter("holonomic_odometry", false);
 
       topic_root_ = this->get_parameter("topic_root").as_string();
+      holonomic_odometry_ = this->get_parameter("holonomic_odometry").as_bool();
       
       // Log all parameters for debugging
       RCLCPP_INFO(this->get_logger(), "ExperienceMap Parameters:");
@@ -95,6 +107,7 @@ class ExperienceMapNode : public rclcpp::Node
       RCLCPP_INFO(this->get_logger(), "  exp_loops: %ld", this->get_parameter("exp_loops").as_int());
       RCLCPP_INFO(this->get_logger(), "  exp_initial_em_deg: %f", this->get_parameter("exp_initial_em_deg").as_double());
       RCLCPP_INFO(this->get_logger(), "  export_filename: %s", this->get_parameter("export_filename").as_string().c_str());
+      RCLCPP_INFO(this->get_logger(), "  holonomic_odometry: %s", holonomic_odometry_ ? "true" : "false");
 
       // Create ExperienceMap with parameters
       em = new ExperienceMap(
@@ -535,7 +548,26 @@ class ExperienceMapNode : public rclcpp::Node
       if (prev_time.seconds() > 0)
       {
         double time_diff = (rclcpp::Time(odo->header.stamp) - prev_time).seconds();
-        em->on_odo(odo->twist.twist.linear.x, odo->twist.twist.angular.z, time_diff);
+        if (holonomic_odometry_)
+        {
+          const double vx = odo->twist.twist.linear.x;
+          const double vy = odo->twist.twist.linear.y;
+          double speed = std::hypot(vx, vy);
+          double dheading = 0.0;
+          if (speed * time_diff > kMinHolonomicTranslation)
+          {
+            dheading = std::atan2(vy, vx);
+          }
+          else
+          {
+            speed = 0.0;
+          }
+          em->on_odo_holonomic(speed, dheading, odo->twist.twist.angular.z, time_diff);
+        }
+        else
+        {
+          em->on_odo(odo->twist.twist.linear.x, odo->twist.twist.angular.z, time_diff);
+        }
         
         // If in NAVIGATION mode, publish the odometry pose (integrated)
         if (ModeGlobals::getInstance().isNavigationMode()) {
@@ -1059,6 +1091,7 @@ class ExperienceMapNode : public rclcpp::Node
     rclcpp::Service<htmslam::srv::SetGoal>::SharedPtr set_goal_service_;
 
     std::string current_mode_ = "mapping";
+    bool holonomic_odometry_ = false;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mode_subscriber_;
     
   #ifdef HAVE_IRRLICHT
