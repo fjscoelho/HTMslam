@@ -61,7 +61,7 @@ pose_cells_node:
 experience_map_node:
   ros__parameters:
     exp_correction: 0.5
-    exp_loops: 1
+    exp_loops: 10
     exp_initial_em_deg: -83.1
     exp_map_size: 500
     export_filename: topological_map.json

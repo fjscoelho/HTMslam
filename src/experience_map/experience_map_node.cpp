@@ -212,8 +212,10 @@ class ExperienceMapNode : public rclcpp::Node
       RCLCPP_INFO(this->get_logger(), "TF broadcaster initialized");
       
       // Initialize subscribers
+      // Sensor data QoS: odometry sources (T265, bags) usually publish best_effort,
+      // which a reliable subscriber cannot receive.
       sub_odometry = this->create_subscription<nav_msgs::msg::Odometry>(
-        topic_root_ + "/odom", 10,
+        topic_root_ + "/odom", rclcpp::SensorDataQoS(),
         std::bind(&ExperienceMapNode::odo_callback, this, std::placeholders::_1));
       
       sub_action = this->create_subscription<topological_msgs::msg::TopologicalAction>(

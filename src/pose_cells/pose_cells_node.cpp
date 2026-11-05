@@ -126,8 +126,10 @@ public:
     pub_pc = this->create_publisher<topological_msgs::msg::TopologicalAction>(
       topic_root + "/PoseCell/TopologicalAction", 10);
     
+    // Sensor data QoS: odometry sources (T265, bags) usually publish best_effort,
+    // which a reliable subscriber cannot receive.
     sub_odometry = this->create_subscription<nav_msgs::msg::Odometry>(
-      topic_root + "/odom", 10,
+      topic_root + "/odom", rclcpp::SensorDataQoS(),
       std::bind(&PoseCellNode::odo_callback, this, std::placeholders::_1));
     
     sub_place_context = this->create_subscription<topological_msgs::msg::PlaceContextMatch>(
