@@ -4,8 +4,11 @@
 // pipeline. Each observation (point cloud + PlaceContext) is compared against
 // the stored PlaceContextTemplates by SDR overlap. When the best overlap
 // reaches `match_threshold`, the matched template id and the relative yaw
-// between the current cloud and the stored one are published. Otherwise a new
-// PlaceContextTemplate is created and its id is published.
+// between the current cloud and the stored one are published. Between
+// `new_template_threshold` and `match_threshold` the best template is reused
+// (hysteresis), so a noisy frame does not create a template per cloud. A new
+// PlaceContextTemplate is only created below `new_template_threshold`, and its
+// id is published with matched=false.
 //
 //   sensor_msgs/PointCloud2 ──────────────┐
 //                                         ├──► SDR overlap + stratified histogram ──► PlaceContextMatch
@@ -257,6 +260,8 @@ public:
     const std::string place_context_topic =
       this->declare_parameter("place_context_topic", std::string(""));
     match_threshold_ = this->declare_parameter("match_threshold", 0.85);
+    new_template_threshold_ = this->declare_parameter(
+      "new_template_threshold", std::max(0.0, match_threshold_ - 0.05));
     hist_n_bins_ = this->declare_parameter("hist_n_bins", 360);
     hist_n_rings_ = this->declare_parameter("hist_n_rings", 10);
     hist_use_centroid_ = this->declare_parameter("hist_use_centroid", true);
@@ -269,6 +274,15 @@ public:
     }
     if (match_threshold_ < 0.0 || match_threshold_ > 1.0) {
       throw std::runtime_error("match_threshold must be in [0, 1]");
+    }
+    if (new_template_threshold_ < 0.0 || new_template_threshold_ > match_threshold_) {
+      const double clamped = std::clamp(new_template_threshold_, 0.0, match_threshold_);
+      RCLCPP_WARN(
+        this->get_logger(),
+        "new_template_threshold=%.3f is invalid (must be in [0, match_threshold=%.3f]); "
+        "using %.3f. Lower values create fewer templates.",
+        new_template_threshold_, match_threshold_, clamped);
+      new_template_threshold_ = clamped;
     }
 
     const std::string cloud_topic = pointcloud_topic.empty() ?
@@ -293,8 +307,9 @@ public:
 
     RCLCPP_INFO(
       this->get_logger(),
-      "PlaceContextCellsNode ready: threshold=%.2f, histogram=%dx%d",
-      match_threshold_, hist_n_rings_, hist_n_bins_);
+      "PlaceContextCellsNode ready: match threshold=%.2f, new template below=%.2f, "
+      "histogram=%dx%d",
+      match_threshold_, new_template_threshold_, hist_n_rings_, hist_n_bins_);
     RCLCPP_INFO(
       this->get_logger(), "Subscribing to '%s' and '%s', publishing '%s'",
       cloud_topic.c_str(), context_topic.c_str(),
@@ -369,7 +384,10 @@ private:
     out.overlap = ratio;
 
     double yaw_ms = 0.0;
-    if (best_idx >= 0 && ratio >= match_threshold_) {
+    // Hysteresis: reusing the best template down to new_template_threshold_
+    // avoids creating a new template for every noisy frame around the match
+    // threshold. Below new_template_threshold_ the place is considered new.
+    if (best_idx >= 0 && ratio >= new_template_threshold_) {
       const PlaceContextTemplate & matched = templates_[static_cast<std::size_t>(best_idx)];
       const auto yaw_start = std::chrono::steady_clock::now();
       out.relative_rad = estimate_yaw_from_stratified_histograms(
@@ -379,10 +397,18 @@ private:
       out.matched = true;
       out.context_cell_id = matched.id;
 
-      RCLCPP_DEBUG(
-        this->get_logger(),
-        "Matched template %u (overlap=%.3f, yaw=%.2f deg)",
-        matched.id, ratio, out.relative_rad * 180.0 / M_PI);
+      if (ratio >= match_threshold_) {
+        RCLCPP_INFO(
+          this->get_logger(),
+          "Matched template %u (overlap=%.3f, yaw=%.2f deg, templates=%zu)",
+          matched.id, ratio, out.relative_rad * 180.0 / M_PI, templates_.size());
+      } else {
+        RCLCPP_INFO_THROTTLE(
+          this->get_logger(), *this, 2000,
+          "Kept template %u by hysteresis (overlap=%.3f < match_threshold=%.2f, "
+          "new_template_threshold=%.2f, templates=%zu)",
+          matched.id, ratio, match_threshold_, new_template_threshold_, templates_.size());
+      }
     } else {
       PlaceContextTemplate created;
       created.id = next_id_++;
@@ -418,6 +444,7 @@ private:
 
   std::string topic_root_;
   double match_threshold_ = 0.85;
+  double new_template_threshold_ = 0.80;
   int hist_n_bins_ = 360;
   int hist_n_rings_ = 10;
   bool hist_use_centroid_ = true;

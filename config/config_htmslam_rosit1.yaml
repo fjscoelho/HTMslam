@@ -27,16 +27,20 @@ place_context_cells_node:
     # place_context_topic: /rosi/place_context
     #   default: <topic_root>/place_context
     match_threshold: 0.97
+    # Templates are only created when the best overlap falls below this value.
+    # Must be <= match_threshold. The band between the two is the hysteresis:
+    # lower values reuse an existing template for longer and create fewer
+    # templates (0.93 = no hysteresis; 0.90 keeps reusing a place down to 0.90).
+    new_template_threshold: 0.90
     hist_n_bins: 360
     hist_n_rings: 10
-    hist_use_centroid: false
     hist_refine_peak: false
     min_points: 100
     sync_max_interval: 0.5
 
 pose_cells_node:
   ros__parameters:
-    pc_dim_xy: 30
+    pc_dim_xy: 40
     pc_dim_th: 36
     pc_w_e_dim: 7
     pc_w_i_dim: 5
@@ -45,12 +49,17 @@ pose_cells_node:
     pc_global_inhib: 0.00002
     vt_active_decay: 1.0
     pc_vt_inject_energy: 0.15
-    # 30 cells * 2 m = 60 m grid. With ~2 m per odometry message this keeps
-    # the translation below 1.41 cell/step, the range where path_integration
-    # weights stay non-negative.
-    pc_cell_x_size: 2.0
-    exp_delta_pc_threshold: 4.0
+    # 40 cells * 1 m = 40 m torus. This bag's T265 publishes at 200 Hz while
+    # moving at ~0.3 m/s, i.e. ~1.5 mm (0.0015 cell) per message, so path
+    # integration is well resolved.
+    pc_cell_x_size: 0.5
+    exp_delta_pc_threshold: 2.0
     pc_vt_restore: 0.05
+    # Reject loop closures to visual templates created less than 50 templates
+    # ago (~8 s on this bag, which creates ~6.5 templates/s). Without it, the
+    # template flip-flop while the robot is nearly still closes loops between
+    # experiences a few centimetres apart and the map jumps backwards.
+    loop_closure_vt_window: 50
     posecells_size: 250
     # Spot is holonomic: use twist.linear.y too, so the translation direction
     # is not forced along the heading.

@@ -5,6 +5,7 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 import os
 
+# ros2 bag play rosi_t1_03_11_26/neoslam_recovered.mcap --clock --start-paused --topics /T265/pose/sample /D400/color/image_raw /velodyne_points --remap /D400/color/image_raw:=/rosi/image_raw /velodyne_points:=/rosi/pointcloud /T265/pose/sample:=/rosi/odom
 
 def generate_launch_description():
     pkg_dir = get_package_share_directory('htmslam')

@@ -61,6 +61,9 @@ bool use_graphics;
  *   - pc_cell_x_size: Physical size represented by each x/y cell in meters (default: 1.0)
  *   - exp_delta_pc_threshold: Pose change threshold for creating new experiences (default: 2.0)
  *   - pc_vt_restore: Energy restoration factor for visual templates (default: 0.05)
+ *   - loop_closure_vt_window: Minimum number of newer visual templates before a
+ *     template may close a loop; rejects loops between places seen moments apart
+ *     (default: 50)
  *   - enable: Enable Irrlicht graphics visualization (default: true)
  *   - posecells_size: Size of visualization window (default: 250)
  *   - media_path: Path to media resources for visualization
@@ -88,6 +91,7 @@ public:
     this->declare_parameter("pc_cell_x_size", 1.0);
     this->declare_parameter("exp_delta_pc_threshold", 2.0);
     this->declare_parameter("pc_vt_restore", 0.05);
+    this->declare_parameter("loop_closure_vt_window", 50);
     this->declare_parameter("enable", true);
     this->declare_parameter("posecells_size", 250);
     this->declare_parameter("media_path", "");
@@ -105,6 +109,7 @@ public:
     RCLCPP_INFO(this->get_logger(), "  pc_vt_inject_energy: %f", this->get_parameter("pc_vt_inject_energy").as_double());
     RCLCPP_INFO(this->get_logger(), "  pc_cell_x_size: %f", this->get_parameter("pc_cell_x_size").as_double());
     RCLCPP_INFO(this->get_logger(), "  exp_delta_pc_threshold: %f", this->get_parameter("exp_delta_pc_threshold").as_double());
+    RCLCPP_INFO(this->get_logger(), "  loop_closure_vt_window: %ld", this->get_parameter("loop_closure_vt_window").as_int());
     RCLCPP_INFO(this->get_logger(), "  holonomic_odometry: %s", holonomic_odometry_ ? "true" : "false");
     
     // Create PosecellNetwork with parameters
@@ -120,7 +125,8 @@ public:
       this->get_parameter("pc_vt_inject_energy").as_double(),
       this->get_parameter("pc_cell_x_size").as_double(),
       this->get_parameter("exp_delta_pc_threshold").as_double(),
-      this->get_parameter("pc_vt_restore").as_double()
+      this->get_parameter("pc_vt_restore").as_double(),
+      static_cast<int>(this->get_parameter("loop_closure_vt_window").as_int())
     );
     
     pub_pc = this->create_publisher<topological_msgs::msg::TopologicalAction>(
@@ -302,8 +308,10 @@ private:
   void place_context_callback(
     const topological_msgs::msg::PlaceContextMatch::SharedPtr match)
   {
-    RCLCPP_INFO(this->get_logger(), "PC:place_context_callback id=%d rad=%f matched=%d",
-                 match->context_cell_id, match->relative_rad, static_cast<int>(match->matched));
+    RCLCPP_INFO(this->get_logger(),
+                "PC:place_context_callback id=%d rad=%f matched=%d overlap=%.3f",
+                match->context_cell_id, match->relative_rad,
+                static_cast<int>(match->matched), match->overlap);
 
     pc->on_view_template(match->context_cell_id, match->relative_rad);
   

@@ -53,7 +53,7 @@ public:
                   int pc_w_e_var, int pc_w_i_var, double pc_global_inhib,
                   double vt_active_decay, double pc_vt_inject_energy,
                   double pc_cell_x_size, double exp_delta_pc_threshold,
-                  double pc_vt_restore);
+                    double pc_vt_restore, int loop_closure_vt_window);
   ~PosecellNetwork();
 
   void on_odo(double vtrans, double vrot, double time_diff_s);
@@ -222,6 +222,10 @@ private:
   double PC_CELL_X_SIZE;
 
   double EXP_DELTA_PC_THRESHOLD;
+
+  // Minimum number of newer visual templates a template must have before it
+  // may close a loop. Larger values reject loops to places seen moments ago.
+  std::size_t LOOP_CLOSURE_VT_WINDOW;
 
   double best_x;
   double best_y;

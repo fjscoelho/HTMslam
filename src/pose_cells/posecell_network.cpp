@@ -6,15 +6,43 @@
 #include <assert.h>
 
 #include <cmath>
+#include <cstddef>
 #include <float.h>
 
 using namespace std;
+
+namespace
+{
+// A visual template counts as "recent" while fewer than `window` newer
+// templates have been created. Recent templates must not inject energy nor
+// close loops: doing so links experiences that are only a few steps apart and
+// makes the experience map jump backwards.
+constexpr std::size_t kRecentVtWindow = 10;
+
+// When the robot revisits a known route the pose-cell estimate hovers between
+// two neighbouring experiences and the matcher alternates between them. A
+// backward switch over a small experience gap makes the map jump backwards
+// (looks like driving in reverse), so such candidates are ignored. Larger
+// backward gaps are genuine loop closures and stay allowed.
+constexpr unsigned int kLoopClosureBackwardGap = 50;
+
+bool is_recent_template(std::size_t vt, std::size_t total_templates, std::size_t window)
+{
+  return total_templates <= window ||
+         vt >= total_templates - window;
+}
+
+bool is_backward_adjacent(unsigned int from, unsigned int to)
+{
+  return to < from && (from - to) < kLoopClosureBackwardGap;
+}
+}  // namespace
 
 PosecellNetwork::PosecellNetwork(int pc_dim_xy, int pc_dim_th, int pc_w_e_dim, int pc_w_i_dim,
                                  int pc_w_e_var, int pc_w_i_var, double pc_global_inhib,
                                  double vt_active_decay, double pc_vt_inject_energy,
                                  double pc_cell_x_size, double exp_delta_pc_threshold,
-                                 double pc_vt_restore)
+                                 double pc_vt_restore, int loop_closure_vt_window)
 {
   /*
    ** pose cell constants.
@@ -33,6 +61,8 @@ PosecellNetwork::PosecellNetwork(int pc_dim_xy, int pc_dim_th, int pc_w_e_dim, i
   EXP_DELTA_PC_THRESHOLD = exp_delta_pc_threshold;
 
   PC_VT_RESTORE = pc_vt_restore;
+  LOOP_CLOSURE_VT_WINDOW = loop_closure_vt_window > 0 ?
+    static_cast<std::size_t>(loop_closure_vt_window) : 0;
 
   // the starting position within the posecell network
   best_x = floor((double)PC_DIM_XY / 2.0);
@@ -928,6 +958,8 @@ PosecellNetwork::PosecellAction PosecellNetwork::get_action()
     // Vou verificar
 
     PosecellVisualTemplate * pcvt = &visual_templates[current_vt];
+    const bool vt_is_recent =
+      is_recent_template(current_vt, visual_templates.size(), LOOP_CLOSURE_VT_WINDOW);
     if (pcvt->exps.size() == 0)
     {
       create_experience();
@@ -942,28 +974,55 @@ PosecellNetwork::PosecellAction PosecellNetwork::get_action()
       double min_delta = DBL_MAX;
       double delta_pc;
 
-    // find the closest experience in pose cell space
-      for (i = 0; i < pcvt->exps.size(); i++)
+      // Only templates with at least LOOP_CLOSURE_VT_WINDOW newer templates may
+      // close loops. Otherwise a place recognised a few steps after being
+      // created links two consecutive experiences and the map jumps back
+      // (looks like driving in reverse).
+      if (!vt_is_recent)
       {
-        // make sure we aren't comparing to the current experience
-        if (current_exp == pcvt->exps[i])
-          continue;
-
-        experience = &experiences[pcvt->exps[i]];
-        delta_pc = get_delta_pc(experience->x_pc, experience->y_pc, experience->th_pc);
-
-        if (delta_pc < min_delta)
+        // find the closest experience in pose cell space
+        for (i = 0; i < pcvt->exps.size(); i++)
         {
-          min_delta = delta_pc;
-          min_delta_id = pcvt->exps[i];
+          // make sure we aren't comparing to the current experience
+          if (current_exp == pcvt->exps[i])
+            continue;
+
+          // ignore a step back to an immediately preceding experience; the
+          // candidate would only make the current node bounce backwards
+          if (is_backward_adjacent(current_exp, pcvt->exps[i]))
+            continue;
+
+          experience = &experiences[pcvt->exps[i]];
+          delta_pc = get_delta_pc(experience->x_pc, experience->y_pc, experience->th_pc);
+
+          if (delta_pc < min_delta)
+          {
+            min_delta = delta_pc;
+            min_delta_id = pcvt->exps[i];
+          }
+        }
+
+        // if an experience is closer than the thres create a link
+        if (min_delta < EXP_DELTA_PC_THRESHOLD)
+        {
+          matched_exp_id = min_delta_id;
+          action = CREATE_EDGE;
+          RCLCPP_INFO(rclcpp::get_logger("PosecellNetwork"),
+                      "🔁 Loop closure: exp %u -> %d (vt=%u->%u, delta_pc=%.3f < %.3f)",
+                      current_exp, matched_exp_id, prev_vt, current_vt,
+                      min_delta, EXP_DELTA_PC_THRESHOLD);
         }
       }
 
-      // if an experience is closer than the thres create a link
-      if (min_delta < EXP_DELTA_PC_THRESHOLD)
+      if (matched_exp_id == -1 && delta_pc <= EXP_DELTA_PC_THRESHOLD)
       {
-        matched_exp_id = min_delta_id;
-        action = CREATE_EDGE;
+        // No eligible candidate and no real displacement: neither close a loop
+        // nor duplicate the current experience.
+        static rclcpp::Clock throttle_clock(RCL_STEADY_TIME);
+        RCLCPP_INFO_THROTTLE(rclcpp::get_logger("PosecellNetwork"), throttle_clock, 2000,
+                    "⏭️ skipping loop closure (vt=%u, %zu templates, delta_pc=%.3f)",
+                    current_vt, visual_templates.size(), delta_pc);
+        return NO_ACTION;
       }
 
       if (current_exp != (unsigned)matched_exp_id)
@@ -1074,7 +1133,7 @@ void PosecellNetwork::on_view_template(unsigned int vt, double vt_rad)
     pcvt = &visual_templates[vt];
 
     // this prevents energy injected in recently created vt's
-    if (vt < (visual_templates.size() - 10))
+    if (!is_recent_template(vt, visual_templates.size(), kRecentVtWindow))
     {
       if (vt != current_vt)
       {
@@ -1130,7 +1189,8 @@ void PosecellNetwork::on_view_template(unsigned int vt, double vt_rad)
     else
     {
       RCLCPP_DEBUG(rclcpp::get_logger("PosecellNetwork"),
-                   "vt=%u is too recent (newer than last 10), skipping injection", vt);
+                   "vt=%u is too recent (newer than last %zu), skipping injection",
+                   vt, kRecentVtWindow);
     }
   }
 
