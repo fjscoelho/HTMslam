@@ -313,7 +313,7 @@ private:
                 match->context_cell_id, match->relative_rad,
                 static_cast<int>(match->matched), match->overlap);
 
-    pc->on_view_template(match->context_cell_id, match->relative_rad);
+    pc->on_view_template(match->context_cell_id, match->relative_rad, match->matched);
   
         #ifdef HAVE_IRRLICHT
             if (use_graphics)

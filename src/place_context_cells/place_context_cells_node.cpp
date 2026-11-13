@@ -284,6 +284,21 @@ public:
         new_template_threshold_, match_threshold_, clamped);
       new_template_threshold_ = clamped;
     }
+    // The same place fluctuates by a few percent of overlap, while different
+    // places already share ~90% of the SDR. A wide band makes the matcher
+    // reuse templates of other places for continuity.
+    constexpr double kMaxHysteresisBand = 0.05;
+    if (match_threshold_ - new_template_threshold_ > kMaxHysteresisBand) {
+      RCLCPP_WARN(
+        this->get_logger(),
+        "Hysteresis band is %.3f (match_threshold=%.3f, new_template_threshold=%.3f); "
+        "values above %.2f make the matcher reuse templates of distant places, so the "
+        "published id stops meaning 'this place'. Raise new_template_threshold to "
+        ">= %.3f.",
+        match_threshold_ - new_template_threshold_, match_threshold_,
+        new_template_threshold_, kMaxHysteresisBand,
+        match_threshold_ - kMaxHysteresisBand);
+    }
 
     const std::string cloud_topic = pointcloud_topic.empty() ?
       topic_root_ + "/pointcloud" : pointcloud_topic;
@@ -384,9 +399,16 @@ private:
     out.overlap = ratio;
 
     double yaw_ms = 0.0;
-    // Hysteresis: reusing the best template down to new_template_threshold_
-    // avoids creating a new template for every noisy frame around the match
-    // threshold. Below new_template_threshold_ the place is considered new.
+    // Three zones around the best overlap:
+    //   >= match_threshold_          confident recognition -> matched=true
+    //   [new_template_threshold_, match_threshold_)
+    //                                hysteresis: reuse the best template so the
+    //                                id stays continuous across noisy frames,
+    //                                but do NOT report a match (matched=false)
+    //   < new_template_threshold_    new place -> new template
+    // Only a confident match may inject energy into the pose cells or close a
+    // loop; otherwise an overlap that merely falls inside the hysteresis band
+    // would be published as a recognition and create false loop closures.
     if (best_idx >= 0 && ratio >= new_template_threshold_) {
       const PlaceContextTemplate & matched = templates_[static_cast<std::size_t>(best_idx)];
       const auto yaw_start = std::chrono::steady_clock::now();
@@ -394,10 +416,10 @@ private:
         matched.histogram, histogram, hist_n_rings_, hist_n_bins_, hist_refine_peak_);
       yaw_ms = elapsed_ms(yaw_start, std::chrono::steady_clock::now());
 
-      out.matched = true;
       out.context_cell_id = matched.id;
+      out.matched = ratio >= match_threshold_;
 
-      if (ratio >= match_threshold_) {
+      if (out.matched) {
         RCLCPP_INFO(
           this->get_logger(),
           "Matched template %u (overlap=%.3f, yaw=%.2f deg, templates=%zu)",
@@ -405,9 +427,9 @@ private:
       } else {
         RCLCPP_INFO_THROTTLE(
           this->get_logger(), *this, 2000,
-          "Kept template %u by hysteresis (overlap=%.3f < match_threshold=%.2f, "
-          "new_template_threshold=%.2f, templates=%zu)",
-          matched.id, ratio, match_threshold_, new_template_threshold_, templates_.size());
+          "Reused template %u by hysteresis, not a match (overlap=%.3f < "
+          "match_threshold=%.3f, templates=%zu)",
+          matched.id, ratio, match_threshold_, templates_.size());
       }
     } else {
       PlaceContextTemplate created;

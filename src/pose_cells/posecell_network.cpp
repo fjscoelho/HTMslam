@@ -71,6 +71,7 @@ PosecellNetwork::PosecellNetwork(int pc_dim_xy, int pc_dim_th, int pc_w_e_dim, i
 
   current_exp = 0;
   current_vt = 0;
+  prev_vt = 0;
 
   pose_cell_builder();
 
@@ -978,7 +979,10 @@ PosecellNetwork::PosecellAction PosecellNetwork::get_action()
       // close loops. Otherwise a place recognised a few steps after being
       // created links two consecutive experiences and the map jumps back
       // (looks like driving in reverse).
-      if (!vt_is_recent)
+      // A loop closure also requires a confident match: a template reused by
+      // the matcher's hysteresis band is not a recognition, so linking its
+      // experiences would create a false loop.
+      if (!vt_is_recent && vt_is_confident)
       {
         // find the closest experience in pose cell space
         for (i = 0; i < pcvt->exps.size(); i++)
@@ -1020,8 +1024,9 @@ PosecellNetwork::PosecellAction PosecellNetwork::get_action()
         // nor duplicate the current experience.
         static rclcpp::Clock throttle_clock(RCL_STEADY_TIME);
         RCLCPP_INFO_THROTTLE(rclcpp::get_logger("PosecellNetwork"), throttle_clock, 2000,
-                    "⏭️ skipping loop closure (vt=%u, %zu templates, delta_pc=%.3f)",
-                    current_vt, visual_templates.size(), delta_pc);
+                    "⏭️ skipping loop closure (vt=%u, confident=%d, %zu templates, delta_pc=%.3f)",
+                    current_vt, static_cast<int>(vt_is_confident), visual_templates.size(),
+                    delta_pc);
         return NO_ACTION;
       }
 
@@ -1098,12 +1103,13 @@ void PosecellNetwork::create_view_template()
 
 }
 
-void PosecellNetwork::on_view_template(unsigned int vt, double vt_rad)
+void PosecellNetwork::on_view_template(unsigned int vt, double vt_rad, bool confident)
 { 
   // LOG: recebimento do template
+  vt_is_confident = confident;
   RCLCPP_INFO(rclcpp::get_logger("PosecellNetwork"), 
-              "📥 on_view_template: vt=%u, rad=%.4f, mode=%s, total_templates=%zu",
-              vt, vt_rad,
+              "📥 on_view_template: vt=%u, rad=%.4f, confident=%d, mode=%s, total_templates=%zu",
+              vt, vt_rad, static_cast<int>(confident),
               ModeGlobals::getInstance().isNavigationMode() ? "NAVIGATION" : "MAPPING",
               visual_templates.size());
 
@@ -1135,7 +1141,8 @@ void PosecellNetwork::on_view_template(unsigned int vt, double vt_rad)
     // this prevents energy injected in recently created vt's
     if (!is_recent_template(vt, visual_templates.size(), kRecentVtWindow))
     {
-      if (vt != current_vt)
+      const bool vt_changed = (vt != current_vt);
+      if (vt_changed)
       {
         // template different from current, don't increment decay
         RCLCPP_DEBUG(rclcpp::get_logger("PosecellNetwork"),
@@ -1146,44 +1153,63 @@ void PosecellNetwork::on_view_template(unsigned int vt, double vt_rad)
                      "vt==current_vt, decay incremented to %.3f", pcvt->decay);
       }
 
-      // this line is magic. ask michael about it
-      double energy = PC_VT_INJECT_ENERGY * 1.0 / 30.0 * (30.0 - exp(1.2 * pcvt->decay));
-      RCLCPP_INFO(rclcpp::get_logger("PosecellNetwork"),
-                  "🔋 vt=%u, decay=%.3f, energy=%.6f (threshold=%.6f)",
-                  vt, pcvt->decay, energy, PC_VT_INJECT_ENERGY);
-
-      if (energy > 0)
+      static rclcpp::Clock throttle_clock(RCL_STEADY_TIME);
+      if (!confident)
       {
-        vt_delta_pc_th = vt_rad / (2.0*M_PI) * PC_DIM_TH;
-        double pc_th_corrected = pcvt->pc_th + vt_rad / (2.0*M_PI) * PC_DIM_TH;
-        // Ajuste de wrap
-        if (pc_th_corrected < 0) 
-          pc_th_corrected = PC_DIM_TH + pc_th_corrected;
-        if (pc_th_corrected >= PC_DIM_TH)
-          pc_th_corrected = pc_th_corrected - PC_DIM_TH;
-
-        int inj_x = (int)pcvt->pc_x;
-        int inj_y = (int)pcvt->pc_y;
-        int inj_th = (int)pc_th_corrected;
-
-        // Verifica limites antes de injetar
-        if (inj_x >= 0 && inj_x < PC_DIM_XY &&
-            inj_y >= 0 && inj_y < PC_DIM_XY &&
-            inj_th >= 0 && inj_th < PC_DIM_TH) {
-          inject(inj_x, inj_y, inj_th, energy);
-          RCLCPP_INFO(rclcpp::get_logger("PosecellNetwork"),
-                      "✅ Injected energy=%.6f at (%d,%d,%d) | current best=(%.2f,%.2f,%.2f)",
-                      energy, inj_x, inj_y, inj_th, best_x, best_y, best_th);
-        } else {
-          RCLCPP_WARN(rclcpp::get_logger("PosecellNetwork"),
-                      "❌ Injection coordinates out of bounds: (%d,%d,%d) | dims=(%d,%d,%d)",
-                      inj_x, inj_y, inj_th, PC_DIM_XY, PC_DIM_XY, PC_DIM_TH);
-        }
+        // Weak match: the id is reused only to keep the template sequence
+        // continuous. Pulling the packet towards it could drag the estimate to
+        // a different place, so nothing is injected.
+        RCLCPP_INFO_THROTTLE(rclcpp::get_logger("PosecellNetwork"), throttle_clock, 2000,
+                             "⏭️ vt=%u: weak match (not confident), energy not injected", vt);
+      }
+      else if (!vt_changed)
+      {
+        // Same place as the previous observation: the packet is already there.
+        RCLCPP_INFO_THROTTLE(rclcpp::get_logger("PosecellNetwork"), throttle_clock, 2000,
+                             "⏭️ vt=%u: same template as the previous observation, "
+                             "energy not injected", vt);
       }
       else
       {
-        RCLCPP_WARN(rclcpp::get_logger("PosecellNetwork"),
-                    "⚠️ Energy <= 0 (decay=%.3f), skipping injection", pcvt->decay);
+        // this line is magic. ask michael about it
+        double energy = PC_VT_INJECT_ENERGY * 1.0 / 30.0 * (30.0 - exp(1.2 * pcvt->decay));
+        RCLCPP_INFO(rclcpp::get_logger("PosecellNetwork"),
+                    "🔋 vt=%u, decay=%.3f, energy=%.6f (threshold=%.6f)",
+                    vt, pcvt->decay, energy, PC_VT_INJECT_ENERGY);
+
+        if (energy > 0)
+        {
+          vt_delta_pc_th = vt_rad / (2.0*M_PI) * PC_DIM_TH;
+          double pc_th_corrected = pcvt->pc_th + vt_rad / (2.0*M_PI) * PC_DIM_TH;
+          // Ajuste de wrap
+          if (pc_th_corrected < 0) 
+            pc_th_corrected = PC_DIM_TH + pc_th_corrected;
+          if (pc_th_corrected >= PC_DIM_TH)
+            pc_th_corrected = pc_th_corrected - PC_DIM_TH;
+
+          int inj_x = (int)pcvt->pc_x;
+          int inj_y = (int)pcvt->pc_y;
+          int inj_th = (int)pc_th_corrected;
+
+          // Verifica limites antes de injetar
+          if (inj_x >= 0 && inj_x < PC_DIM_XY &&
+              inj_y >= 0 && inj_y < PC_DIM_XY &&
+              inj_th >= 0 && inj_th < PC_DIM_TH) {
+            inject(inj_x, inj_y, inj_th, energy);
+            RCLCPP_INFO(rclcpp::get_logger("PosecellNetwork"),
+                        "✅ Injected energy=%.6f at (%d,%d,%d) | current best=(%.2f,%.2f,%.2f)",
+                        energy, inj_x, inj_y, inj_th, best_x, best_y, best_th);
+          } else {
+            RCLCPP_WARN(rclcpp::get_logger("PosecellNetwork"),
+                        "❌ Injection coordinates out of bounds: (%d,%d,%d) | dims=(%d,%d,%d)",
+                        inj_x, inj_y, inj_th, PC_DIM_XY, PC_DIM_XY, PC_DIM_TH);
+          }
+        }
+        else
+        {
+          RCLCPP_WARN(rclcpp::get_logger("PosecellNetwork"),
+                      "⚠️ Energy <= 0 (decay=%.3f), skipping injection", pcvt->decay);
+        }
       }
     }
     else

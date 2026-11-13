@@ -64,7 +64,7 @@ public:
   // body frame, in radians (0 = straight ahead).
   void on_odo_holonomic(double vtrans, double dheading, double vrot, double time_diff_s);
 
-  void on_view_template(unsigned int vt, double vt_rad);
+  void on_view_template(unsigned int vt, double vt_rad, bool confident = true);
 
   PosecellAction get_action();
 
@@ -271,6 +271,11 @@ private:
   std::vector<PosecellExperience> experiences;
 
   unsigned int current_vt, prev_vt;
+
+  // True when the last view template came from a confident match (overlap
+  // above the place matcher's match threshold). Weak matches keep the template
+  // id for continuity but must not inject energy nor close loops.
+  bool vt_is_confident = false;
   unsigned int current_exp, prev_exp;
 
 };
