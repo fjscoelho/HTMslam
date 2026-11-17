@@ -106,7 +106,7 @@ experience_map_node:
     # One marker per experience, so single clouds can be toggled in RViz.
     marker_namespace_chunk: 100
     marker_refresh_period: 30.0     # s, re-sends markers whose pose changed
-    marker_point_size: 0.05         # m, RViz point size for the keyframe markers
+    marker_point_size: 0.025        # m, RViz point size for the keyframe markers
     # Height band kept in each keyframe cloud, in the base frame (floor ~ 0,
     # sensor at 0.3 m). Discards floor and ceiling points that only clutter the
     # view. Set keyframe_z_max <= keyframe_z_min to disable the filter.

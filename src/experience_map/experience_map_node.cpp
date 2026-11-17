@@ -112,7 +112,7 @@ class ExperienceMapNode : public rclcpp::Node
       this->declare_parameter("cloud_publish_period", 5.0);
       this->declare_parameter("marker_namespace_chunk", 100);
       this->declare_parameter("marker_refresh_period", 30.0);
-      this->declare_parameter("marker_point_size", 0.05);
+      this->declare_parameter("marker_point_size", 0.025);
       this->declare_parameter("keyframe_z_min", 0.2);
       this->declare_parameter("keyframe_z_max", 0.4);
 
@@ -1479,7 +1479,7 @@ class ExperienceMapNode : public rclcpp::Node
     double cloud_publish_period_ = 5.0;
     int marker_namespace_chunk_ = 100;
     double marker_refresh_period_ = 30.0;
-    double marker_point_size_ = 0.05;
+    double marker_point_size_ = 0.025;
     double z_band_min_ = 0.2;
     double z_band_max_ = 0.4;
     bool mount_logged_ = false;
