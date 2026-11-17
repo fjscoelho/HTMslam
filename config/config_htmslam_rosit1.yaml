@@ -26,7 +26,7 @@ place_context_cells_node:
     topic_root: rosi
     # place_context_topic: /rosi/place_context
     #   default: <topic_root>/place_context
-    match_threshold: 0.93
+    match_threshold: 0.96 #0.93
     # Templates are only created when the best overlap falls below this value.
     # Must be <= match_threshold.
     #
@@ -36,12 +36,18 @@ place_context_cells_node:
     # and cannot close a loop. Keep the band narrow (<= 0.05): the same place
     # fluctuates by a few percent, while different places already share ~0.90 of
     # the SDR, so a wide band reuses ids of distant places.
-    new_template_threshold: 0.85
+    new_template_threshold: 0.93 #0.92
     hist_n_bins: 360
     hist_n_rings: 10
     hist_refine_peak: false
     min_points: 100
     sync_max_interval: 0.5
+    # Keyframe clouds: the cloud that created each template is published on
+    # <topic_root>/place_context_cloud, so the experience map can attach it to
+    # the experience. Downsampled in the sensor frame (voxel grid).
+    store_keyframe_clouds: true
+    cloud_voxel_size: 0.15   # m
+    cloud_max_points: 2000
 
 pose_cells_node:
   ros__parameters:
@@ -75,7 +81,7 @@ pose_cells_node:
 experience_map_node:
   ros__parameters:
     exp_correction: 0.5
-    exp_loops: 10
+    exp_loops: 2
     exp_initial_em_deg: 90.0
     exp_map_size: 500
     export_filename: topological_map.json
@@ -84,3 +90,25 @@ experience_map_node:
     holonomic_odometry: false
     # Irrlicht window (enable_graphics:=true|false overrides this value)
     enable: true
+
+    # ---- Keyframe cloud visualization ----
+    store_keyframe_clouds: true
+    # Frame the clouds are stored in: the robot base at the moment the
+    # experience was created. The sensor->base offset is applied once, on
+    # arrival; the map pose is applied only when publishing.
+    base_frame: base_link
+    # Used only when base_frame <- sensor frame is missing from TF.
+    sensor_mount_xyz: [0.0, 0.0, 0.3]
+    sensor_mount_rpy: [0.0, 0.0, 0.0]
+    # Overview cloud in /map: all experiences coalesced and voxelized again.
+    global_cloud_voxel_size: 0.30   # 0 disables the extra downsampling
+    cloud_publish_period: 5.0       # s between coalesced republishes
+    # One marker per experience, so single clouds can be toggled in RViz.
+    marker_namespace_chunk: 100
+    marker_refresh_period: 30.0     # s, re-sends markers whose pose changed
+    marker_point_size: 0.05         # m, RViz point size for the keyframe markers
+    # Height band kept in each keyframe cloud, in the base frame (floor ~ 0,
+    # sensor at 0.3 m). Discards floor and ceiling points that only clutter the
+    # view. Set keyframe_z_max <= keyframe_z_min to disable the filter.
+    keyframe_z_min: 0.6
+    keyframe_z_max: 0.7

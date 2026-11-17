@@ -15,6 +15,14 @@
 
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>  
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/msg/point_field.hpp>
+#include <topological_msgs/msg/keyframe_cloud.hpp>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+#include <array>
+#include <unordered_map>
+#include <unordered_set>
 #include <std_msgs/msg/string.hpp>  
 #include "mode_manager/mode_globals.h"  
 #include "state_manager.hpp" 
@@ -96,9 +104,36 @@ class ExperienceMapNode : public rclcpp::Node
       this->declare_parameter("image_file", "");
       this->declare_parameter("export_filename", "topological_map.json");
       this->declare_parameter("holonomic_odometry", false);
+      this->declare_parameter("store_keyframe_clouds", true);
+      this->declare_parameter("base_frame", "base_link");
+      this->declare_parameter("sensor_mount_xyz", std::vector<double>{0.0, 0.0, 0.3});
+      this->declare_parameter("sensor_mount_rpy", std::vector<double>{0.0, 0.0, 0.0});
+      this->declare_parameter("global_cloud_voxel_size", 0.30);
+      this->declare_parameter("cloud_publish_period", 5.0);
+      this->declare_parameter("marker_namespace_chunk", 100);
+      this->declare_parameter("marker_refresh_period", 30.0);
+      this->declare_parameter("marker_point_size", 0.05);
+      this->declare_parameter("keyframe_z_min", 0.2);
+      this->declare_parameter("keyframe_z_max", 0.4);
 
       topic_root_ = this->get_parameter("topic_root").as_string();
       holonomic_odometry_ = this->get_parameter("holonomic_odometry").as_bool();
+      store_keyframe_clouds_ = this->get_parameter("store_keyframe_clouds").as_bool();
+      base_frame_ = this->get_parameter("base_frame").as_string();
+      {
+        const auto xyz = this->get_parameter("sensor_mount_xyz").as_double_array();
+        const auto rpy = this->get_parameter("sensor_mount_rpy").as_double_array();
+        for (std::size_t i = 0; i < 3 && i < xyz.size(); ++i) sensor_mount_xyz_[i] = xyz[i];
+        for (std::size_t i = 0; i < 3 && i < rpy.size(); ++i) sensor_mount_rpy_[i] = rpy[i];
+      }
+      global_cloud_voxel_size_ = this->get_parameter("global_cloud_voxel_size").as_double();
+      cloud_publish_period_ = this->get_parameter("cloud_publish_period").as_double();
+      marker_namespace_chunk_ = static_cast<int>(
+        std::max<int64_t>(1, this->get_parameter("marker_namespace_chunk").as_int()));
+      marker_refresh_period_ = this->get_parameter("marker_refresh_period").as_double();
+      marker_point_size_ = this->get_parameter("marker_point_size").as_double();
+      z_band_min_ = this->get_parameter("keyframe_z_min").as_double();
+      z_band_max_ = this->get_parameter("keyframe_z_max").as_double();
       
       // Log all parameters for debugging
       RCLCPP_INFO(this->get_logger(), "ExperienceMap Parameters:");
@@ -210,6 +245,50 @@ class ExperienceMapNode : public rclcpp::Node
 
       tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
       RCLCPP_INFO(this->get_logger(), "TF broadcaster initialized");
+
+      if (store_keyframe_clouds_) {
+        tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
+        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+
+        // One marker per experience, so individual clouds can be toggled in RViz.
+        auto markers_qos = rclcpp::QoS(10);
+        pub_keyframe_markers_ =
+          this->create_publisher<visualization_msgs::msg::MarkerArray>(
+            topic_root_ + "/ExperienceMap/KeyframeMarkers", markers_qos);
+
+        // Overview cloud: published on change, kept for late subscribers.
+        auto cloud_qos = rclcpp::QoS(1);
+        cloud_qos.transient_local();
+        pub_keyframe_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+          topic_root_ + "/ExperienceMap/KeyframeClouds", cloud_qos);
+
+        sub_keyframe_cloud_ = this->create_subscription<topological_msgs::msg::KeyframeCloud>(
+          topic_root_ + "/place_context_cloud", 10,
+          std::bind(&ExperienceMapNode::keyframe_cloud_callback, this,
+                    std::placeholders::_1));
+
+        cloud_timer_ = this->create_wall_timer(
+          std::chrono::milliseconds(200),
+          std::bind(&ExperienceMapNode::cloud_timer_callback, this));
+
+        RCLCPP_INFO(
+          this->get_logger(),
+          "Keyframe clouds: storing in '%s' frame, publishing '%s' (transient_local) "
+          "and '%s'",
+          base_frame_.c_str(),
+          (topic_root_ + "/ExperienceMap/KeyframeClouds").c_str(),
+          (topic_root_ + "/ExperienceMap/KeyframeMarkers").c_str());
+        if (z_band_max_ > z_band_min_) {
+          RCLCPP_INFO(
+            this->get_logger(),
+            "Keyframe clouds: keeping z in [%.2f, %.2f] m of '%s' "
+            "(floor/ceiling are discarded)",
+            z_band_min_, z_band_max_, base_frame_.c_str());
+        } else {
+          RCLCPP_INFO(this->get_logger(),
+                      "Keyframe clouds: z band disabled (keyframe_z_max <= keyframe_z_min)");
+        }
+      }
       
       // Initialize subscribers
       // Sensor data QoS: odometry sources (T265, bags) usually publish best_effort,
@@ -765,6 +844,7 @@ class ExperienceMapNode : public rclcpp::Node
         case topological_msgs::msg::TopologicalAction::CREATE_NODE:
           em->on_create_experience(action->dest_id, action->header.stamp.sec, action->header.stamp.nanosec, action->vt_id);
           em->on_set_experience(action->dest_id, 0);
+          on_experience_created(action->dest_id, action->vt_id);
           break;
 
         case topological_msgs::msg::TopologicalAction::CREATE_EDGE:
@@ -1058,6 +1138,310 @@ class ExperienceMapNode : public rclcpp::Node
     // Experience Map 
     ExperienceMap* em = nullptr;  
     
+    // ============================================
+    // KEYFRAME CLOUDS
+    // Each experience keeps the cloud that created its visual template, stored
+    // in the robot base frame at the moment of creation. The map pose is applied
+    // only when publishing, so the clouds follow loop-closure corrections.
+    // ============================================
+
+    /// Sensor -> base transform: TF first, static parameters as fallback.
+    tf2::Transform lookup_sensor_mount(const std_msgs::msg::Header & header)
+    {
+      try {
+        const auto tf_msg = tf_buffer_->lookupTransform(
+          base_frame_, header.frame_id, header.stamp, rclcpp::Duration::from_seconds(0.05));
+        tf2::Transform mount;
+        tf2::fromMsg(tf_msg.transform, mount);
+        if (!mount_logged_) {
+          mount_logged_ = true;
+          RCLCPP_INFO(this->get_logger(),
+                      "Keyframe clouds: using TF '%s' <- '%s' (z=%.3f)",
+                      base_frame_.c_str(), header.frame_id.c_str(),
+                      mount.getOrigin().z());
+        }
+        return mount;
+      } catch (const tf2::TransformException &) {
+        RCLCPP_WARN_THROTTLE(
+          this->get_logger(), *this, 10000,
+          "Keyframe clouds: TF '%s' <- '%s' unavailable, using sensor_mount_xyz/rpy "
+          "parameters",
+          base_frame_.c_str(), header.frame_id.c_str());
+      }
+      tf2::Quaternion q;
+      q.setRPY(sensor_mount_rpy_[0], sensor_mount_rpy_[1], sensor_mount_rpy_[2]);
+      return tf2::Transform(
+        q, tf2::Vector3(sensor_mount_xyz_[0], sensor_mount_xyz_[1], sensor_mount_xyz_[2]));
+    }
+
+    void keyframe_cloud_callback(const topological_msgs::msg::KeyframeCloud::SharedPtr msg)
+    {
+      const auto & cloud = msg->cloud;
+      const std::size_t n = static_cast<std::size_t>(cloud.width) * cloud.height;
+      if (n == 0 || cloud.point_step < 12 || cloud.data.size() < n * cloud.point_step) {
+        return;
+      }
+
+      const tf2::Transform mount = lookup_sensor_mount(cloud.header);
+      KeyframeCloud data;
+      data.xyz.reserve(n * 3);
+      const float * src = reinterpret_cast<const float *>(cloud.data.data());
+      const std::size_t stride = cloud.point_step / sizeof(float);
+      const bool z_band_enabled = z_band_max_ > z_band_min_;
+      for (std::size_t i = 0; i < n; ++i) {
+        const tf2::Vector3 p(src[i * stride + 0], src[i * stride + 1], src[i * stride + 2]);
+        const tf2::Vector3 q = mount * p;
+        // Keep only the horizontal slice of interest: floor and ceiling points
+        // dominate the cloud and add nothing to the place visualisation.
+        if (z_band_enabled && (q.z() < z_band_min_ || q.z() > z_band_max_)) {
+          continue;
+        }
+        data.xyz.push_back(static_cast<float>(q.x()));
+        data.xyz.push_back(static_cast<float>(q.y()));
+        data.xyz.push_back(static_cast<float>(q.z()));
+      }
+
+      if (data.xyz.empty()) {
+        RCLCPP_WARN_THROTTLE(
+          this->get_logger(), *this, 5000,
+          "Keyframe cloud for vt=%u is empty after the z band [%.2f, %.2f] m in '%s'; "
+          "check keyframe_z_min/keyframe_z_max",
+          msg->vt_id, z_band_min_, z_band_max_, base_frame_.c_str());
+      } else {
+        RCLCPP_INFO_THROTTLE(
+          this->get_logger(), *this, 5000,
+          "Keyframe cloud vt=%u: %zu -> %zu points in z band [%.2f, %.2f] m",
+          msg->vt_id, n, data.size(), z_band_min_, z_band_max_);
+      }
+
+      keyframe_clouds_[msg->vt_id] = std::move(data);
+      clouds_dirty_ = true;
+
+      // Experiences created before their cloud arrived.
+      for (auto it = pending_experiences_.begin(); it != pending_experiences_.end(); ) {
+        if (it->second == msg->vt_id) {
+          publish_experience_marker(it->first);
+          it = pending_experiences_.erase(it);
+        } else {
+          ++it;
+        }
+      }
+    }
+
+    void on_experience_created(unsigned int exp_id, unsigned int vt_id)
+    {
+      if (!store_keyframe_clouds_) {
+        return;
+      }
+      if (keyframe_clouds_.count(vt_id) > 0) {
+        publish_experience_marker(exp_id);
+      } else {
+        pending_experiences_[exp_id] = vt_id;
+      }
+    }
+
+    static void hsv_to_rgb(float h, float s, float v, float & r, float & g, float & b)
+    {
+      const float i = std::floor(h * 6.0f);
+      const float f = h * 6.0f - i;
+      const float p = v * (1.0f - s);
+      const float q = v * (1.0f - f * s);
+      const float t = v * (1.0f - (1.0f - f) * s);
+      switch (static_cast<int>(i) % 6) {
+        case 0: r = v; g = t; b = p; break;
+        case 1: r = q; g = v; b = p; break;
+        case 2: r = p; g = v; b = t; break;
+        case 3: r = p; g = q; b = v; break;
+        case 4: r = t; g = p; b = v; break;
+        default: r = v; g = p; b = q; break;
+      }
+    }
+
+    /// One POINTS marker per experience. The marker pose carries the map pose,
+    /// so RViz applies map corrections to the stored local points.
+    void publish_experience_marker(unsigned int exp_id)
+    {
+      Experience * exp = em->get_experience(exp_id);
+      if (exp == nullptr) {
+        return;
+      }
+      const auto it = keyframe_clouds_.find(static_cast<uint32_t>(exp->vt_id));
+      if (it == keyframe_clouds_.end()) {
+        return;
+      }
+      const KeyframeCloud & cloud = it->second;
+      const std::size_t n = cloud.size();
+
+      visualization_msgs::msg::Marker marker;
+      marker.header.frame_id = "map";
+      marker.header.stamp = this->now();
+      const int chunk = marker_namespace_chunk_;
+      const int start = (static_cast<int>(exp_id) / chunk) * chunk;
+      marker.ns = "exp_cloud_" + std::to_string(start) + "_" +
+        std::to_string(start + chunk - 1);
+      marker.id = static_cast<int>(exp_id);
+      marker.type = visualization_msgs::msg::Marker::POINTS;
+      marker.action = visualization_msgs::msg::Marker::ADD;
+      marker.pose.position.x = exp->x_m;
+      marker.pose.position.y = exp->y_m;
+      marker.pose.position.z = 0.0;
+      tf2::Quaternion q_pose;
+      q_pose.setRPY(0.0, 0.0, exp->th_rad);
+      marker.pose.orientation = tf2::toMsg(q_pose);
+      marker.scale.x = marker.scale.y = marker.scale.z = marker_point_size_;
+      const float hue = std::fmod(static_cast<float>(exp_id) * 0.6180339887f, 1.0f);
+      float r = 1.0f, g = 1.0f, b = 1.0f;
+      hsv_to_rgb(hue, 1.0f, 0.95f, r, g, b);
+      marker.color.r = r;
+      marker.color.g = g;
+      marker.color.b = b;
+      marker.color.a = 0.85f;
+      marker.points.resize(n);
+      for (std::size_t i = 0; i < n; ++i) {
+        marker.points[i].x = cloud.xyz[3 * i + 0];
+        marker.points[i].y = cloud.xyz[3 * i + 1];
+        marker.points[i].z = cloud.xyz[3 * i + 2];
+      }
+
+      visualization_msgs::msg::MarkerArray array;
+      array.markers.push_back(std::move(marker));
+      pub_keyframe_markers_->publish(array);
+      last_marker_pose_[exp_id] = {exp->x_m, exp->y_m, exp->th_rad};
+      ++markers_published_;
+    }
+
+    /// Overview cloud: every experience rendered into the map frame.
+    void publish_global_cloud()
+    {
+      const double voxel = global_cloud_voxel_size_;
+      std::vector<float> buffer;  // x, y, z, rgb (as float bits)
+      std::unordered_set<std::uint64_t> occupied;
+      const int num_exps = em->get_num_experiences();
+      int used = 0;
+
+      const auto cell_key = [](int ix, int iy, int iz) {
+        return (static_cast<std::uint64_t>(ix & 0x1FFFFF) << 42) |
+               (static_cast<std::uint64_t>(iy & 0x1FFFFF) << 21) |
+               static_cast<std::uint64_t>(iz & 0x1FFFFF);
+      };
+
+      for (int id = 0; id < num_exps; ++id) {
+        Experience * exp = em->get_experience(id);
+        if (exp == nullptr) {
+          continue;
+        }
+        const auto it = keyframe_clouds_.find(static_cast<uint32_t>(exp->vt_id));
+        if (it == keyframe_clouds_.end()) {
+          continue;
+        }
+        const KeyframeCloud & cloud = it->second;
+        const double c = std::cos(exp->th_rad);
+        const double s = std::sin(exp->th_rad);
+        const float hue = std::fmod(static_cast<float>(id) * 0.6180339887f, 1.0f);
+        float r = 1.0f, g = 1.0f, b = 1.0f;
+        hsv_to_rgb(hue, 1.0f, 0.95f, r, g, b);
+        const std::uint32_t rgb =
+          (0u << 24) | (static_cast<std::uint32_t>(r * 255.0f) << 16) |
+          (static_cast<std::uint32_t>(g * 255.0f) << 8) |
+          static_cast<std::uint32_t>(b * 255.0f);
+        float rgb_float = 0.0f;
+        std::memcpy(&rgb_float, &rgb, sizeof(float));
+
+        const std::size_t n = cloud.size();
+        for (std::size_t i = 0; i < n; ++i) {
+          const double px = cloud.xyz[3 * i + 0];
+          const double py = cloud.xyz[3 * i + 1];
+          const double pz = cloud.xyz[3 * i + 2];
+          const double mx = c * px - s * py + exp->x_m;
+          const double my = s * px + c * py + exp->y_m;
+          if (voxel > 0.0) {
+            if (!occupied.insert(cell_key(
+                  static_cast<int>(std::floor(mx / voxel)),
+                  static_cast<int>(std::floor(my / voxel)),
+                  static_cast<int>(std::floor(pz / voxel)))).second) {
+              continue;
+            }
+          }
+          buffer.push_back(static_cast<float>(mx));
+          buffer.push_back(static_cast<float>(my));
+          buffer.push_back(static_cast<float>(pz));
+          buffer.push_back(rgb_float);
+        }
+        ++used;
+      }
+
+      sensor_msgs::msg::PointCloud2 out;
+      out.header.frame_id = "map";
+      out.header.stamp = this->now();
+      out.height = 1;
+      out.width = static_cast<std::uint32_t>(buffer.size() / 4);
+      out.is_bigendian = false;
+      out.is_dense = true;
+      out.point_step = 16;
+      out.row_step = out.point_step * out.width;
+      const char * names[4] = {"x", "y", "z", "rgb"};
+      for (std::uint32_t i = 0; i < 4; ++i) {
+        sensor_msgs::msg::PointField field;
+        field.name = names[i];
+        field.offset = i * 4;
+        field.datatype = sensor_msgs::msg::PointField::FLOAT32;
+        field.count = 1;
+        out.fields.push_back(field);
+      }
+      out.data.resize(buffer.size() * sizeof(float));
+      std::memcpy(out.data.data(), buffer.data(), out.data.size());
+      pub_keyframe_cloud_->publish(out);
+
+      RCLCPP_INFO_THROTTLE(
+        this->get_logger(), *this, 5000,
+        "Keyframe overview cloud: %u points from %d experiences "
+        "(%zu clouds stored, %zu markers published, voxel %.2f m)",
+        out.width, used, keyframe_clouds_.size(), markers_published_, voxel);
+    }
+
+    /// Re-sends the markers whose experience pose changed (relaxation, loops).
+    void refresh_changed_markers()
+    {
+      int changed = 0;
+      const int num_exps = em->get_num_experiences();
+      for (int id = 0; id < num_exps; ++id) {
+        const auto known = last_marker_pose_.find(id);
+        if (known == last_marker_pose_.end()) {
+          continue;
+        }
+        Experience * exp = em->get_experience(id);
+        if (exp == nullptr) {
+          continue;
+        }
+        const auto & prev = known->second;
+        if (std::abs(exp->x_m - prev[0]) > 1e-3 ||
+            std::abs(exp->y_m - prev[1]) > 1e-3 ||
+            std::abs(exp->th_rad - prev[2]) > 1e-3) {
+          publish_experience_marker(static_cast<unsigned int>(id));
+          ++changed;
+        }
+      }
+      if (changed > 0) {
+        RCLCPP_INFO(this->get_logger(),
+                    "Keyframe markers refreshed for %d corrected experiences", changed);
+      }
+    }
+
+    void cloud_timer_callback()
+    {
+      const rclcpp::Time now = this->now();
+      if (clouds_dirty_ && (now - last_cloud_publish_).seconds() >= cloud_publish_period_) {
+        publish_global_cloud();
+        last_cloud_publish_ = now;
+        clouds_dirty_ = false;
+      }
+      if (marker_refresh_period_ > 0.0 &&
+          (now - last_marker_refresh_).seconds() >= marker_refresh_period_) {
+        refresh_changed_markers();
+        last_marker_refresh_ = now;
+      }
+    }
+
     // Publishers
     rclcpp::Publisher<topological_msgs::msg::TopologicalMap>::SharedPtr pub_em;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_pose;
@@ -1079,6 +1463,41 @@ class ExperienceMapNode : public rclcpp::Node
     int action_counter = 0;
 
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+
+    // ---- Keyframe clouds ----
+    struct KeyframeCloud
+    {
+      std::vector<float> xyz;   // base_frame, 3 floats per point
+      std::size_t size() const { return xyz.size() / 3; }
+    };
+
+    bool store_keyframe_clouds_ = true;
+    std::string base_frame_ = "base_link";
+    std::array<double, 3> sensor_mount_xyz_{{0.0, 0.0, 0.3}};
+    std::array<double, 3> sensor_mount_rpy_{{0.0, 0.0, 0.0}};
+    double global_cloud_voxel_size_ = 0.30;
+    double cloud_publish_period_ = 5.0;
+    int marker_namespace_chunk_ = 100;
+    double marker_refresh_period_ = 30.0;
+    double marker_point_size_ = 0.05;
+    double z_band_min_ = 0.2;
+    double z_band_max_ = 0.4;
+    bool mount_logged_ = false;
+    std::size_t markers_published_ = 0;
+
+    std::unordered_map<std::uint32_t, KeyframeCloud> keyframe_clouds_;   // by vt_id
+    std::unordered_map<std::uint32_t, std::uint32_t> pending_experiences_;  // exp_id -> vt_id
+    std::unordered_map<std::uint32_t, std::array<double, 3>> last_marker_pose_;
+    bool clouds_dirty_ = false;
+    rclcpp::Time last_cloud_publish_{0, 0, RCL_ROS_TIME};
+    rclcpp::Time last_marker_refresh_{0, 0, RCL_ROS_TIME};
+
+    std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_keyframe_markers_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_keyframe_cloud_;
+    rclcpp::Subscription<topological_msgs::msg::KeyframeCloud>::SharedPtr sub_keyframe_cloud_;
+    rclcpp::TimerBase::SharedPtr cloud_timer_;
 
     // Map Manager
     std::shared_ptr<htmslam::MapManager> map_manager_;

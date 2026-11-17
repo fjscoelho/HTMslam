@@ -91,7 +91,23 @@ def generate_launch_description():
             ]
         )
 
+        # Sensor mount: the keyframe clouds arrive in the lidar frame and are
+        # stored in base_link, so the offset must be in the TF tree.
+        base_link_to_velodyne = Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name='baselink2velodyne',
+            output='screen',
+            arguments=[
+                '--x', '0.0', '--y', '0.0', '--z', '0.3',
+                '--roll', '0.0', '--pitch', '0.0', '--yaw', '0.0',
+                '--frame-id', 'base_link', '--child-frame-id', 'velodyne',
+            ],
+            parameters=[{'use_sim_time': use_sim_time}]
+        )
+
         return [
+            base_link_to_velodyne,
             pcd_htm_node,
             place_context_cells_node,
             pose_cells_node,

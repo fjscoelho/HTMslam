@@ -25,9 +25,11 @@
 #include <cstdint>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -38,6 +40,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <topological_msgs/msg/keyframe_cloud.hpp>
 #include <topological_msgs/msg/place_context.hpp>
 #include <topological_msgs/msg/place_context_match.hpp>
 
@@ -47,6 +50,89 @@ namespace
 {
 
 using Point3d = pointcloud_utils::Point3d;
+
+/// Voxel-grid downsampling: one centroid per occupied cube of edge `voxel`.
+/// The grid is anchored at the cloud origin (the sensor frame), so the result
+/// is deterministic and independent of the number of points.
+void voxel_downsample(
+  const std::vector<Point3d> & points, double voxel,
+  std::vector<Point3d> & out)
+{
+  out.clear();
+  if (voxel <= 0.0) {
+    out = points;
+    return;
+  }
+  struct Accum
+  {
+    double x = 0.0, y = 0.0, z = 0.0;
+    std::size_t n = 0;
+  };
+  std::map<std::tuple<int, int, int>, Accum> grid;
+  for (const auto & p : points) {
+    const auto key = std::make_tuple(
+      static_cast<int>(std::floor(p[0] / voxel)),
+      static_cast<int>(std::floor(p[1] / voxel)),
+      static_cast<int>(std::floor(p[2] / voxel)));
+    Accum & acc = grid[key];
+    acc.x += p[0];
+    acc.y += p[1];
+    acc.z += p[2];
+    ++acc.n;
+  }
+  out.reserve(grid.size());
+  for (const auto & entry : grid) {
+    const Accum & acc = entry.second;
+    const double inv = 1.0 / static_cast<double>(acc.n);
+    out.push_back(Point3d{{acc.x * inv, acc.y * inv, acc.z * inv}});
+  }
+}
+
+/// Keeps at most `max_points`, taking a uniform stride so the spatial
+/// distribution is preserved.
+void cap_points(std::vector<Point3d> & points, std::size_t max_points)
+{
+  if (max_points == 0 || points.size() <= max_points) {
+    return;
+  }
+  const double stride =
+    static_cast<double>(points.size()) / static_cast<double>(max_points);
+  std::vector<Point3d> kept;
+  kept.reserve(max_points);
+  for (std::size_t i = 0; i < max_points; ++i) {
+    kept.push_back(points[static_cast<std::size_t>(i * stride)]);
+  }
+  points.swap(kept);
+}
+
+/// Builds a PointCloud2 with x, y, z (float32) from the given points.
+void fill_cloud_msg(
+  sensor_msgs::msg::PointCloud2 & msg, const std::vector<Point3d> & points)
+{
+  msg.height = 1;
+  msg.width = static_cast<std::uint32_t>(points.size());
+  msg.is_bigendian = false;
+  msg.is_dense = true;
+  msg.point_step = 12;
+  msg.row_step = msg.point_step * msg.width;
+  msg.fields.clear();
+  const char * names[3] = {"x", "y", "z"};
+  for (std::uint32_t i = 0; i < 3; ++i) {
+    sensor_msgs::msg::PointField field;
+    field.name = names[i];
+    field.offset = i * 4;
+    field.datatype = sensor_msgs::msg::PointField::FLOAT32;
+    field.count = 1;
+    msg.fields.push_back(field);
+  }
+  msg.data.resize(static_cast<std::size_t>(msg.row_step));
+  float * data = reinterpret_cast<float *>(msg.data.data());
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    data[3 * i + 0] = static_cast<float>(points[i][0]);
+    data[3 * i + 1] = static_cast<float>(points[i][1]);
+    data[3 * i + 2] = static_cast<float>(points[i][2]);
+  }
+}
 
 // ============================================================
 // PlaceContextTemplate (RatSLAM VisualTemplate analogue)
@@ -268,6 +354,9 @@ public:
     hist_refine_peak_ = this->declare_parameter("hist_refine_peak", false);
     min_points_ = this->declare_parameter("min_points", 100);
     sync_max_interval_ = this->declare_parameter("sync_max_interval", 0.5);
+    store_keyframe_clouds_ = this->declare_parameter("store_keyframe_clouds", true);
+    cloud_voxel_size_ = this->declare_parameter("cloud_voxel_size", 0.15);
+    cloud_max_points_ = this->declare_parameter("cloud_max_points", 2000);
 
     if (hist_n_bins_ <= 0 || hist_n_rings_ <= 0) {
       throw std::runtime_error("hist_n_bins and hist_n_rings must be positive");
@@ -307,6 +396,8 @@ public:
 
     publisher_ = this->create_publisher<topological_msgs::msg::PlaceContextMatch>(
       topic_root_ + "/place_context_match", 10);
+    publisher_cloud_ = this->create_publisher<topological_msgs::msg::KeyframeCloud>(
+      topic_root_ + "/place_context_cloud", 10);
 
     cloud_sub_.subscribe(this, cloud_topic, rmw_qos_profile_sensor_data);
     rclcpp::QoS context_qos(10);
@@ -329,6 +420,13 @@ public:
       this->get_logger(), "Subscribing to '%s' and '%s', publishing '%s'",
       cloud_topic.c_str(), context_topic.c_str(),
       (topic_root_ + "/place_context_match").c_str());
+    if (store_keyframe_clouds_) {
+      RCLCPP_INFO(
+        this->get_logger(),
+        "Publishing keyframe clouds on '%s/place_context_cloud' "
+        "(voxel %.2f m, max %d points)",
+        topic_root_.c_str(), cloud_voxel_size_, cloud_max_points_);
+    }
   }
 
 private:
@@ -447,6 +545,10 @@ private:
         this->get_logger(),
         "New PlaceContextTemplate %u (best overlap %.3f, templates=%zu)",
         out.context_cell_id, ratio, templates_.size());
+
+      if (store_keyframe_clouds_) {
+        publish_keyframe_cloud(*cloud, out.context_cell_id, points);
+      }
     }
 
     publisher_->publish(out);
@@ -464,6 +566,29 @@ private:
       static_cast<double>(database_bytes()) / 1024.0);
   }
 
+  /// Publishes the downsampled cloud that created a template, in the sensor
+  /// frame. The experience map turns it into the experience-local frame.
+  void publish_keyframe_cloud(
+    const PointCloudMsg & reference, std::uint32_t vt_id,
+    const std::vector<Point3d> & points)
+  {
+    std::vector<Point3d> downsampled;
+    voxel_downsample(points, cloud_voxel_size_, downsampled);
+    cap_points(downsampled, static_cast<std::size_t>(std::max(0, cloud_max_points_)));
+
+    topological_msgs::msg::KeyframeCloud msg;
+    msg.header = reference.header;
+    msg.vt_id = vt_id;
+    fill_cloud_msg(msg.cloud, downsampled);
+    msg.cloud.header = reference.header;
+    publisher_cloud_->publish(msg);
+
+    RCLCPP_DEBUG(
+      this->get_logger(),
+      "Keyframe cloud for vt=%u: %zu -> %zu points (voxel %.2f m)",
+      vt_id, points.size(), downsampled.size(), cloud_voxel_size_);
+  }
+
   std::string topic_root_;
   double match_threshold_ = 0.85;
   double new_template_threshold_ = 0.80;
@@ -473,11 +598,15 @@ private:
   bool hist_refine_peak_ = false;
   int min_points_ = 100;
   double sync_max_interval_ = 0.5;
+  bool store_keyframe_clouds_ = true;
+  double cloud_voxel_size_ = 0.15;
+  int cloud_max_points_ = 2000;
 
   std::vector<PlaceContextTemplate> templates_;
   std::uint32_t next_id_ = 0;
 
   rclcpp::Publisher<topological_msgs::msg::PlaceContextMatch>::SharedPtr publisher_;
+  rclcpp::Publisher<topological_msgs::msg::KeyframeCloud>::SharedPtr publisher_cloud_;
   message_filters::Subscriber<PointCloudMsg> cloud_sub_;
   message_filters::Subscriber<PlaceContextMsg> context_sub_;
   std::unique_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
