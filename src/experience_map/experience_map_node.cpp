@@ -848,9 +848,42 @@ class ExperienceMapNode : public rclcpp::Node
           break;
 
         case topological_msgs::msg::TopologicalAction::CREATE_EDGE:
+        {
+          const Experience * link_src = em->get_experience(action->src_id);
+          const Experience * link_dst = em->get_experience(action->dest_id);
+          const double src_th_deg = link_src ? link_src->th_rad * 180.0 / M_PI : 0.0;
+          const double dst_th_deg = link_dst ? link_dst->th_rad * 180.0 / M_PI : 0.0;
+
+          const int links_before = em->get_num_links();
           em->on_create_link(action->src_id, action->dest_id, action->relative_rad);
+          const bool link_created = em->get_num_links() > links_before;
+
           em->on_set_experience(action->dest_id, action->relative_rad);
+
+          // facing_rad is the orientation correction stored in the link. The
+          // next experience created after this loop will take
+          // dst.th + rel_rad as its heading.
+          double facing_deg = 0.0;
+          if (link_created) {
+            const Link * link = em->get_link(em->get_num_links() - 1);
+            if (link != nullptr) {
+              facing_deg = link->facing_rad * 180.0 / M_PI;
+            }
+          }
+          RCLCPP_INFO(
+            this->get_logger(),
+            "🔁 LOOP YAW src=%u dst=%u | rel_rad=%.1f deg | src.th=%.1f dst.th=%.1f "
+            "| facing_rad=%+.1f deg | next.th=%.1f | t=%.3f t_dst=%.3f %s",
+            action->src_id, action->dest_id, action->relative_rad * 180.0 / M_PI,
+            src_th_deg, dst_th_deg, facing_deg,
+            clip_rad_180(link_dst ? link_dst->th_rad + action->relative_rad : 0.0) *
+            180.0 / M_PI,
+            rclcpp::Time(action->header.stamp).seconds(),
+            link_dst ? (link_dst->seconds + link_dst->nanoseconds * 1e-9) : 0.0,
+            link_created ? "" : "(link already existed)");
+          loop_closure_pending_refresh_ = true;
           break;
+        }
 
         case topological_msgs::msg::TopologicalAction::SET_NODE:
           em->on_set_experience(action->dest_id, action->relative_rad);
@@ -858,6 +891,14 @@ class ExperienceMapNode : public rclcpp::Node
       }
 
       em->iterate();
+
+      // D: a loop closure moves the poses, so re-send the affected keyframe
+      // markers immediately instead of waiting for the periodic refresh.
+      if (loop_closure_pending_refresh_) {
+        loop_closure_pending_refresh_ = false;
+        refresh_changed_markers();
+        last_marker_refresh_ = this->now();
+      }
 
       geometry_msgs::msg::PoseStamped pose_output;
       pose_output.header.stamp = action->header.stamp;
@@ -1489,6 +1530,7 @@ class ExperienceMapNode : public rclcpp::Node
     std::unordered_map<std::uint32_t, std::uint32_t> pending_experiences_;  // exp_id -> vt_id
     std::unordered_map<std::uint32_t, std::array<double, 3>> last_marker_pose_;
     bool clouds_dirty_ = false;
+    bool loop_closure_pending_refresh_ = false;
     rclcpp::Time last_cloud_publish_{0, 0, RCL_ROS_TIME};
     rclcpp::Time last_marker_refresh_{0, 0, RCL_ROS_TIME};
 

@@ -232,7 +232,6 @@ Visualization Manager:
         exp_cloud_500_599: true
         exp_cloud_600_699: true
         exp_cloud_700_799: true
-        exp_cloud_800_899: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -286,25 +285,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 20.668624877929688
+      Distance: 25.92672348022461
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 1.882999300956726
-        Y: 6.0867767333984375
-        Z: -0.2864304184913635
+        X: 2.614492893218994
+        Y: 6.579304218292236
+        Z: -0.05824398994445801
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.6497963666915894
+      Pitch: 0.7597969770431519
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz_default_plugins)
-      Yaw: 4.479300022125244
+      Yaw: 4.704273223876953
     Saved: ~
 Window Geometry:
   Displays:

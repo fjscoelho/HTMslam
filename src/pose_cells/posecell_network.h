@@ -4,6 +4,8 @@
 #define _USE_MATH_DEFINES
 #include "math.h"
 
+#include <algorithm>
+#include <cmath>
 #include <stdio.h>
 
 #include <rclcpp/rclcpp.hpp>
@@ -21,6 +23,10 @@ struct PosecellVisualTemplate
         unsigned int id;
         double pc_x, pc_y, pc_th;
         double decay;
+        // Odometry heading (integrated vrot only, never corrected by vision)
+        // when the template was created. Used to resolve the pi ambiguity of
+        // the visual yaw estimate.
+        double odom_th = 0.0;
         std::vector<unsigned int> exps;
 
         template <typename Archive>
@@ -29,6 +35,7 @@ struct PosecellVisualTemplate
           ar & id;
           ar & pc_x & pc_y & pc_th;
           ar & decay;
+          ar & odom_th;
         }
 
 };
@@ -93,6 +100,28 @@ public:
   unsigned int get_current_exp_id() { return current_exp; }
 
   double get_relative_rad() { return vt_delta_pc_th * 2.0 * M_PI / PC_DIM_TH; }
+
+  // Yaw of the last observation, with the pi ambiguity resolved against the
+  // pose-cell (odometry) prediction. This is the value to publish to the map.
+  double get_last_vt_rad() const { return last_vt_rad; }
+
+  // True when the last observation's yaw could not be disambiguated (both
+  // hypotheses fit the odometry equally well), so it must not close a loop.
+  bool last_vt_yaw_ambiguous() const { return last_vt_yaw_ambiguous_; }
+
+  // Resolve the pi ambiguity of the visual yaw estimate using the difference
+  // between the current pose-cell heading and the template's stored heading.
+  // `margin_deg` is how close the two hypotheses must be before the estimate is
+  // considered ambiguous; 0 disables the ambiguity rejection.
+  // `margin_deg` rejects the estimate when both branches fit the odometry
+  // equally well. `max_disagreement_deg` rejects it when even the best branch
+  // disagrees with the odometry by more than that (0 disables).
+  void set_yaw_disambiguation(bool enabled, double margin_deg, double max_disagreement_deg = 0.0)
+  {
+    YAW_DISAMBIGUATE = enabled;
+    YAW_AMBIGUITY_MARGIN_RAD = std::max(0.0, margin_deg) * M_PI / 180.0;
+    YAW_MAX_DISAGREEMENT_RAD = std::max(0.0, max_disagreement_deg) * M_PI / 180.0;
+  }
 
   unsigned int get_current_vt_id() const { return current_vt; }
 
@@ -232,6 +261,17 @@ private:
   double best_th;
 
   double vt_delta_pc_th;
+
+  // Yaw estimate of the last observation, after resolving the pi ambiguity.
+  double last_vt_rad = 0.0;
+  bool last_vt_yaw_ambiguous_ = false;
+  // Heading integrated from the odometry yaw rate only. Unlike best_th it is
+  // never pulled by view-template injections, so it is a clean reference for
+  // the 180 deg disambiguation.
+  double odom_th_accum_ = 0.0;
+  bool YAW_DISAMBIGUATE = true;
+  double YAW_AMBIGUITY_MARGIN_RAD = 20.0 * M_PI / 180.0;
+  double YAW_MAX_DISAGREEMENT_RAD = 30.0 * M_PI / 180.0;
 
   bool odo_update;
   bool vt_update;

@@ -71,6 +71,18 @@ pose_cells_node:
     # template flip-flop while the robot is nearly still closes loops between
     # experiences a few centimetres apart and the map jumps backwards.
     loop_closure_vt_window: 50
+    # The angular histogram of a symmetric scene (a straight corridor) is
+    # almost invariant to a 180 deg rotation, so the visual yaw is only known
+    # modulo pi. The pose-cell heading difference selects the right branch.
+    yaw_disambiguation: true
+    # If both branches fit the odometry within this margin the estimate is
+    # ambiguous: no loop closure and no injection.
+    yaw_ambiguity_margin_deg: 20.0
+    # If even the best branch disagrees with the odometry by more than this,
+    # the visual match is implausible: no loop closure and no injection.
+    # Measured on the ROSI bag: the visual yaw error is 4.9 deg median, but
+    # reaches 45 deg on a few matches, which twists the map heading.
+    yaw_max_disagreement_deg: 30.0
     posecells_size: 250
     # Spot is holonomic: use twist.linear.y too, so the translation direction
     # is not forced along the heading.

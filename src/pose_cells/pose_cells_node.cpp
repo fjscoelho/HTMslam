@@ -92,6 +92,9 @@ public:
     this->declare_parameter("exp_delta_pc_threshold", 2.0);
     this->declare_parameter("pc_vt_restore", 0.05);
     this->declare_parameter("loop_closure_vt_window", 50);
+    this->declare_parameter("yaw_disambiguation", true);
+    this->declare_parameter("yaw_ambiguity_margin_deg", 20.0);
+    this->declare_parameter("yaw_max_disagreement_deg", 30.0);
     this->declare_parameter("enable", true);
     this->declare_parameter("posecells_size", 250);
     this->declare_parameter("media_path", "");
@@ -110,6 +113,11 @@ public:
     RCLCPP_INFO(this->get_logger(), "  pc_cell_x_size: %f", this->get_parameter("pc_cell_x_size").as_double());
     RCLCPP_INFO(this->get_logger(), "  exp_delta_pc_threshold: %f", this->get_parameter("exp_delta_pc_threshold").as_double());
     RCLCPP_INFO(this->get_logger(), "  loop_closure_vt_window: %ld", this->get_parameter("loop_closure_vt_window").as_int());
+    RCLCPP_INFO(this->get_logger(),
+                "  yaw_disambiguation: %s (margin %.1f deg, max disagreement %.1f deg)",
+                this->get_parameter("yaw_disambiguation").as_bool() ? "true" : "false",
+                this->get_parameter("yaw_ambiguity_margin_deg").as_double(),
+                this->get_parameter("yaw_max_disagreement_deg").as_double());
     RCLCPP_INFO(this->get_logger(), "  holonomic_odometry: %s", holonomic_odometry_ ? "true" : "false");
     
     // Create PosecellNetwork with parameters
@@ -128,6 +136,10 @@ public:
       this->get_parameter("pc_vt_restore").as_double(),
       static_cast<int>(this->get_parameter("loop_closure_vt_window").as_int())
     );
+    pc->set_yaw_disambiguation(
+      this->get_parameter("yaw_disambiguation").as_bool(),
+      this->get_parameter("yaw_ambiguity_margin_deg").as_double(),
+      this->get_parameter("yaw_max_disagreement_deg").as_double());
     
     pub_pc = this->create_publisher<topological_msgs::msg::TopologicalAction>(
       topic_root + "/PoseCell/TopologicalAction", 10);
@@ -286,12 +298,18 @@ private:
       {
         pc_output.header.stamp = odo->header.stamp;
         pc_output.dest_id = pc->get_current_exp_id();
-        pc_output.relative_rad = pc->get_relative_rad();
+        // Yaw of this observation as estimated by the place matcher, with the
+        // pi ambiguity resolved against the pose-cell heading. Reading it from
+        // the network (instead of vt_delta_pc_th, which is only refreshed when
+        // an injection happens) is what keeps the heading consistent.
+        pc_output.relative_rad = pc->get_last_vt_rad();
         pc_output.vt_id = pc->get_current_vt_id();
         pub_pc->publish(pc_output);
         
-        RCLCPP_INFO(this->get_logger(), "PC:action_publish action=%d src=%d dest=%d vt_id=%d",
-                     pc_output.action, pc_output.src_id, pc_output.dest_id, pc_output.vt_id);
+        RCLCPP_INFO(this->get_logger(),
+                    "PC:action_publish action=%d src=%d dest=%d vt_id=%d rel_rad=%.1f deg",
+                    pc_output.action, pc_output.src_id, pc_output.dest_id,
+                    pc_output.vt_id, pc_output.relative_rad * 180.0 / M_PI);
       }
 
         #ifdef HAVE_IRRLICHT

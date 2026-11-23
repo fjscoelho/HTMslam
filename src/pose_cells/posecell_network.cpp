@@ -36,6 +36,16 @@ bool is_backward_adjacent(unsigned int from, unsigned int to)
 {
   return to < from && (from - to) < kLoopClosureBackwardGap;
 }
+
+/// Wraps an angle to [-pi, pi).
+double wrap_pi(double angle)
+{
+  double a = std::fmod(angle + M_PI, 2.0 * M_PI);
+  if (a < 0.0) {
+    a += 2.0 * M_PI;
+  }
+  return a - M_PI;
+}
 }  // namespace
 
 PosecellNetwork::PosecellNetwork(int pc_dim_xy, int pc_dim_th, int pc_w_e_dim, int pc_w_i_dim,
@@ -72,6 +82,7 @@ PosecellNetwork::PosecellNetwork(int pc_dim_xy, int pc_dim_th, int pc_w_e_dim, i
   current_exp = 0;
   current_vt = 0;
   prev_vt = 0;
+  vt_delta_pc_th = 0.0;
 
   pose_cell_builder();
 
@@ -982,7 +993,7 @@ PosecellNetwork::PosecellAction PosecellNetwork::get_action()
       // A loop closure also requires a confident match: a template reused by
       // the matcher's hysteresis band is not a recognition, so linking its
       // experiences would create a false loop.
-      if (!vt_is_recent && vt_is_confident)
+      if (!vt_is_recent && vt_is_confident && !last_vt_yaw_ambiguous_)
       {
         // find the closest experience in pose cell space
         for (i = 0; i < pcvt->exps.size(); i++)
@@ -1024,8 +1035,10 @@ PosecellNetwork::PosecellAction PosecellNetwork::get_action()
         // nor duplicate the current experience.
         static rclcpp::Clock throttle_clock(RCL_STEADY_TIME);
         RCLCPP_INFO_THROTTLE(rclcpp::get_logger("PosecellNetwork"), throttle_clock, 2000,
-                    "⏭️ skipping loop closure (vt=%u, confident=%d, %zu templates, delta_pc=%.3f)",
-                    current_vt, static_cast<int>(vt_is_confident), visual_templates.size(),
+                    "⏭️ skipping loop closure (vt=%u, confident=%d, ambiguous=%d, "
+                    "%zu templates, delta_pc=%.3f)",
+                    current_vt, static_cast<int>(vt_is_confident),
+                    static_cast<int>(last_vt_yaw_ambiguous_), visual_templates.size(),
                     delta_pc);
         return NO_ACTION;
       }
@@ -1061,6 +1074,7 @@ void PosecellNetwork::on_odo(double vtrans, double vrot, double time_diff_s)
 {
   vtrans = vtrans * time_diff_s;
   vrot = vrot * time_diff_s;
+  odom_th_accum_ = wrap_pi(odom_th_accum_ + vrot);
 
   excite();
   inhibit();
@@ -1075,6 +1089,7 @@ void PosecellNetwork::on_odo_holonomic(double vtrans, double dheading, double vr
 {
   vtrans = vtrans * time_diff_s;
   vrot = vrot * time_diff_s;
+  odom_th_accum_ = wrap_pi(odom_th_accum_ + vrot);
 
   excite();
   inhibit();
@@ -1096,6 +1111,7 @@ void PosecellNetwork::create_view_template()
   pcvt->pc_y = y();
   pcvt->pc_th = th();
   pcvt->decay = VT_ACTIVE_DECAY;
+  pcvt->odom_th = odom_th_accum_;
 
   RCLCPP_INFO(rclcpp::get_logger("PosecellNetwork"), 
               "📝 Created new visual template ID=%zu, pc=(%.2f,%.2f,%.2f), decay=%.2f",
@@ -1129,14 +1145,71 @@ void PosecellNetwork::on_view_template(unsigned int vt, double vt_rad, bool conf
 
   if (vt >= visual_templates.size())
   {
-    // must be a new template
+    // must be a new template: it is created at the current pose, so the yaw
+    // offset is zero by definition
     create_view_template();
     assert(vt == visual_templates.size()-1);
+    last_vt_rad = 0.0;
+    last_vt_yaw_ambiguous_ = false;
+    vt_delta_pc_th = 0.0;
   }
   else
   {
     // the template must exist
     pcvt = &visual_templates[vt];
+
+    // Resolve the pi ambiguity of the visual yaw estimate. The angular
+    // histogram of a symmetric scene (a straight corridor) is nearly invariant
+    // to a 180 deg rotation, so the matcher only pins the rotation modulo pi.
+    // The pose-cell heading difference between the template and the current
+    // observation is the odometry prediction, and selects the right branch.
+    if (YAW_DISAMBIGUATE)
+    {
+      const double expected = wrap_pi(odom_th_accum_ - pcvt->odom_th);
+      const double raw = wrap_pi(vt_rad);
+      const double flipped = wrap_pi(vt_rad + M_PI);
+      const double d_raw = std::fabs(wrap_pi(raw - expected));
+      const double d_flip = std::fabs(wrap_pi(flipped - expected));
+      const double margin = std::fabs(d_raw - d_flip);
+
+      // Reject when the two branches are too close to tell apart, or when even
+      // the best branch disagrees with the odometry (the match itself is
+      // implausible). Otherwise the ambiguity is resolved by the odometry.
+      const double best_distance = std::min(d_raw, d_flip);
+      last_vt_yaw_ambiguous_ = (margin < YAW_AMBIGUITY_MARGIN_RAD) ||
+        (YAW_MAX_DISAGREEMENT_RAD > 0.0 && best_distance > YAW_MAX_DISAGREEMENT_RAD);
+      vt_rad = (d_flip < d_raw) ? flipped : raw;
+
+      const bool flipped_chosen = (vt_rad == flipped) && (raw != flipped);
+      if (last_vt_yaw_ambiguous_) {
+        RCLCPP_INFO(
+          rclcpp::get_logger("PosecellNetwork"),
+          "🧭 vt=%u yaw ambiguous: raw=%.1f flipped=%.1f expected=%.1f deg "
+          "(margin %.1f) -> no loop closure",
+          vt, raw * 180.0 / M_PI, flipped * 180.0 / M_PI, expected * 180.0 / M_PI,
+          YAW_AMBIGUITY_MARGIN_RAD * 180.0 / M_PI);
+      } else if (flipped_chosen) {
+        RCLCPP_INFO(
+          rclcpp::get_logger("PosecellNetwork"),
+          "🧭 vt=%u yaw flipped by odometry: raw=%.1f -> %.1f deg (expected %.1f)",
+          vt, raw * 180.0 / M_PI, flipped * 180.0 / M_PI, expected * 180.0 / M_PI);
+      } else {
+        RCLCPP_DEBUG(
+          rclcpp::get_logger("PosecellNetwork"),
+          "🧭 vt=%u yaw: raw=%.1f expected=%.1f deg (kept)",
+          vt, raw * 180.0 / M_PI, expected * 180.0 / M_PI);
+      }
+    }
+    else
+    {
+      last_vt_yaw_ambiguous_ = false;
+    }
+
+    // Keep the network's own angle in sync with the (disambiguated) estimate,
+    // so get_delta_pc() compares poses with the current observation rather than
+    // with an angle left over from the last successful injection.
+    last_vt_rad = wrap_pi(vt_rad);
+    vt_delta_pc_th = wrap_pi(vt_rad) / (2.0 * M_PI) * PC_DIM_TH;
 
     // this prevents energy injected in recently created vt's
     if (!is_recent_template(vt, visual_templates.size(), kRecentVtWindow))
@@ -1263,6 +1336,7 @@ Json::Value PosecellNetwork::serialize_to_json() const {
         vt_json["pc_y"] = vt.pc_y;
         vt_json["pc_th"] = vt.pc_th;
         vt_json["decay"] = vt.decay;
+        vt_json["odom_th"] = vt.odom_th;
         // Serializar exps
         Json::Value exps_array(Json::arrayValue);
         for (unsigned int exp_id : vt.exps) {
@@ -1328,6 +1402,7 @@ bool PosecellNetwork::deserialize_from_json(const Json::Value& root) {
         vt.pc_y = vt_json["pc_y"].asDouble();
         vt.pc_th = vt_json["pc_th"].asDouble();
         vt.decay = vt_json["decay"].asDouble();
+        vt.odom_th = vt_json.get("odom_th", 0.0).asDouble();
         Json::Value exps_array = vt_json["exps"];
         for (const auto& exp_id_json : exps_array) {
             vt.exps.push_back(exp_id_json.asUInt());
